@@ -20,7 +20,7 @@ setup_keywords = dict()
 # THESE SETTINGS NEED TO BE CHANGED FOR EVERY PRODUCT.
 #
 setup_keywords['name'] = 'desigal'
-setup_keywords['description'] = 'DESI BGS package'
+setup_keywords['description'] = 'DESI Galaxy and Quasar Physics utils'
 setup_keywords['author'] = 'DESI Collaboration'
 setup_keywords['author_email'] = 'desi-data@desi.lbl.gov'
 setup_keywords['license'] = 'BSD'
