@@ -47,14 +47,15 @@ def get_spectra(targetids, release, n_workers=-1, **kwargs):
     sel_data = all_data[select_mask]
     del all_data
 
-    sel_data["ZCAT_NSPEC"] = 0
-    sel_data["ZCAT_PRIMARY"] = 0
+    if "ZCAT_PRIMARY" not in sel_data.colnames:
+        sel_data["ZCAT_NSPEC"] = 0
+        sel_data["ZCAT_PRIMARY"] = 0
 
-    nspec, specprim = find_primary_spectra(sel_data, **kwargs)
-    sel_data["ZCAT_NSPEC"] = nspec  # number of spectra for this object in catalog
-    sel_data[
-        "ZCAT_PRIMARY"
-    ] = specprim  # True/False if this is the primary spectrum in catalog
+        nspec, specprim = find_primary_spectra(sel_data, **kwargs)
+        sel_data["ZCAT_NSPEC"] = nspec  # number of spectra for this object in catalog
+        sel_data[
+            "ZCAT_PRIMARY"
+        ] = specprim  # True/False if this is the primary spectrum in catalog
 
     sel_data = sel_data[sel_data["ZCAT_PRIMARY"]]
 
