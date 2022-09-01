@@ -55,15 +55,27 @@ def get_spectra(targetids, release, n_workers=-1, use_db=True, **kwargs):
     if found_targets_bool.sum() > len(targetids):
         raise SystemExit("Unresolved duplicate targets present!")
 
-    sel_spectra = Parallel(n_jobs=n_workers)(
-        delayed(_read_spectra)(survey, program, healpix, targetid, release_path)
-        for survey, program, healpix, targetid in zip(
-            sel_data["SURVEY"],
-            sel_data["PROGRAM"],
-            sel_data["HEALPIX"],
-            sel_data["TARGETID"],
+    # adding special case so as to have the option to parallelize externally
+    if n_workers == 1:
+        sel_spectra = [
+            _read_spectra(survey, program, healpix, targetid, release_path)
+            for survey, program, healpix, targetid in zip(
+                sel_data["SURVEY"],
+                sel_data["PROGRAM"],
+                sel_data["HEALPIX"],
+                sel_data["TARGETID"],
+            )
+        ]
+    else:
+        sel_spectra = Parallel(n_jobs=n_workers)(
+            delayed(_read_spectra)(survey, program, healpix, targetid, release_path)
+            for survey, program, healpix, targetid in zip(
+                sel_data["SURVEY"],
+                sel_data["PROGRAM"],
+                sel_data["HEALPIX"],
+                sel_data["TARGETID"],
+            )
         )
-    )
     return desispec.spectra.stack(sel_spectra)
 
 
