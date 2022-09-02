@@ -47,13 +47,13 @@ def get_spectra(targetids, release, n_workers=-1, use_db=True, **kwargs):
     else:
         sel_data = _sel_objects_fits(release, release_path, targetids)
 
+    sel_data = sel_data.set_index("TARGETID", drop=False)
+    sel_data = sel_data.loc[targetids]
     found_targets_bool = np.isin(targetids, sel_data["TARGETID"])
-
-    if found_targets_bool.sum() < len(targetids):
-        print(f"Target ids {targetids[~found_targets_bool]} not found!")
-
-    if found_targets_bool.sum() > len(targetids):
-        raise SystemExit("Unresolved duplicate targets present!")
+    if ~np.all(found_targets_bool):
+        raise ValueError(
+            "Spectra for target ids {targetids[~found_targets_bool]} not found!"
+        )
 
     # adding special case so as to have the option to parallelize externally
     if n_workers == 1:
@@ -82,7 +82,10 @@ def get_spectra(targetids, release, n_workers=-1, use_db=True, **kwargs):
 def _sel_objects_fits(release, release_path, targetids, **kwargs):
     """Select objects from the fits file. Helper function of get_spectra."""
     # Replace this step by database call once that is available
-    all_data = Table.read(release_path / "zcatalog" / f"zall-pix-{release}.fits")
+    all_data = Table.read(
+        release_path / "zcatalog" / f"zall-pix-{release}.fits",
+        format="fits",
+    )
 
     select_mask = np.isin(all_data["TARGETID"].value, targetids)
     sel_data = all_data[select_mask]
@@ -99,6 +102,11 @@ def _sel_objects_fits(release, release_path, targetids, **kwargs):
         ] = specprim  # True/False if this is the primary spectrum in catalog
 
     sel_data = sel_data[sel_data["ZCAT_PRIMARY"]]
+    sel_data = sel_data[["SURVEY", "PROGRAM", "HEALPIX", "TARGETID"]].to_pandas()
+    for col, dtype in sel_data.dtypes.items():
+        if dtype == np.object:  # Only process object columns.
+            # decode, or return original value if decode return Nan
+            sel_data[col] = sel_data[col].str.decode("utf-8")
 
     return sel_data
 
