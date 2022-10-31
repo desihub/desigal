@@ -1,14 +1,13 @@
 import numpy as np
 
 
-
-def _redshift(data_in, z_in, z_out, exponent):
+def _deredshift(data_in, z_in, z_out, exponent):
     """Implements the basic redshift equation"""
     data_out = np.atleast_2d(data_in)
     return data_out * (((1 + z_out) / (1 + z_in)) ** exponent)
 
 
-def redshift(data_in, z_in, z_out, data_type):
+def deredshift(data_in, z_in, z_out, data_type):
     """Redshift Correction for input data
 
     Parameters
@@ -38,11 +37,11 @@ def redshift(data_in, z_in, z_out, data_type):
     exponent = exponent_dict[data_type]
 
     if isinstance(data_in, np.ndarray):
-        return _redshift(data_in, z_in, z_out, exponent)
+        return _deredshift(data_in, z_in, z_out, exponent)
     if isinstance(data_in, dict):
         data_out = {}
         for key in data_in.keys():
-            data_out[key] = _redshift(data_in[key], z_in, z_out, exponent)
+            data_out[key] = _deredshift(data_in[key], z_in, z_out, exponent)
         return data_out
     else:
         raise ValueError("Input data not of a valid type")
