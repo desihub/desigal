@@ -114,7 +114,9 @@ def iterative_normalize(wave, flux, ivar, mask=None):
     raise NotImplementedError
 
 
-def normalize(wave, flux, ivar, mask=None, method="median", flux_window=None):
+def normalize(
+    wave, flux, ivar, mask=None, method="median", flux_window=None, n_workers=1
+):
     if method not in ["mean", "median", "flux-window", "continuum", "iterative"]:
         raise ValueError(f"Unknown normalization method: {method}")
     if mask is not None:
@@ -125,7 +127,9 @@ def normalize(wave, flux, ivar, mask=None, method="median", flux_window=None):
     elif method == "median":
         return median_normalize(wave, flux, ivar)
     elif method == "flux-window":
-        return flux_window_normalize(wave, flux, ivar, flux_window=flux_window)
+        return flux_window_normalize(
+            wave, flux, ivar, flux_window=flux_window, n_workers=n_workers
+        )
     elif method == "continuum":
         return continuum_normalize(wave, flux, ivar)
     elif method == "iterative":
