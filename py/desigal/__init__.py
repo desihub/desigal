@@ -15,8 +15,8 @@ the desiutil_ package.
 .. _desiutil: https://github.com/desihub/desiutil
 """
 #
-from __future__ import (absolute_import, division, print_function,
-                        unicode_literals)
+from __future__ import absolute_import, division, print_function, unicode_literals
+
 # The line above will help with 2to3 support.
 #
 # Set version string.
