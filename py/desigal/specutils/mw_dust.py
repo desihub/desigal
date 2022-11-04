@@ -52,3 +52,4 @@ def mw_dust_correct(data_in, wave, ra, dec, data_type):
         return data_out
     else:
         raise ValueError("Input data not of a valid type")
+        
