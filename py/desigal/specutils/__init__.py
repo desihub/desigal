@@ -1,3 +1,4 @@
+from .mw_dust import mw_dust_correct
 from .redshift import deredshift
 from .coadd_cameras import coadd_cameras
 from .spectra_io import get_spectra
