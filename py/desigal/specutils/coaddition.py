@@ -38,7 +38,7 @@ def _coadd_flux(wave, flux, ivar, mask=None, method="mean", weight=None):
 
 def bootstrap_coadd(wave, flux, ivar, mask=None, method="mean", weight=None):
     boot_idx = np.random.choice(
-        np.arange(len(flux)), replace=True, size=np.max([10,int(len(flux)/10)])
+        np.arange(len(flux)), replace=True, size=len(flux)
     )  # take a random sample each iteration
     boot_coadd = _coadd_flux(
         wave, flux[boot_idx], ivar[boot_idx], mask=mask, method=method, weight=weight[boot_idx]
@@ -57,6 +57,7 @@ def coadd_flux(
     weight=None,
     stack_error="bootstrap",
     n_workers=1,
+    bootstrap_samples=1000,
 ):
     if np.all(weight==None):
         weight = np.ones(len(flux))
@@ -72,7 +73,7 @@ def coadd_flux(
                     bootstrap_coadd(
                         wave, flux, ivar, mask=mask, method=method, weight=weight
                     )
-                    for _ in range(100)
+                    for _ in range(bootstrap_samples)
                 ]
             )
             return np.nanmean(boot_averages, axis=0), np.nanstd(boot_averages, axis=0)
@@ -82,7 +83,7 @@ def coadd_flux(
                     delayed(bootstrap_coadd)(
                         wave, flux, ivar, mask=mask, method=method, weight=weight
                     )
-                    for _ in range(100)
+                    for _ in range(bootstrap_samples)
                 )
             )
             return np.nanmean(boot_averages, axis=0), np.nanstd(boot_averages, axis=0)
