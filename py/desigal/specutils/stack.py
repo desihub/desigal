@@ -26,6 +26,7 @@ def stack_spectra(
     weight=None,
     stack_method="mean",
     stack_error="bootstrap",
+    bootstrap_samples=1000,
     n_workers=-1,
 ):
     if spectra is None:
