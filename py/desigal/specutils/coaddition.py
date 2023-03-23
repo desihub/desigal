@@ -11,7 +11,7 @@ def _coadd_flux(wave, flux, ivar, mask=None, method="mean", weight=None):
         raise ValueError(f"Coadd type must be one of {methods}")
     if method == "mean":
         wl_weight = np.ones_like(flux) * np.expand_dims(weight, axis=-1)
-        nan_mask = (np.isnan(flux)) | (np.isnan(wl_weight))
+        nan_mask = (np.isnan(flux)) | (np.isnan(ivar)) | (ivar==0.) | (np.isnan(wl_weight))
         flux[nan_mask] = 0.0
         wl_weight[nan_mask] = 1e-10 # hack
         stacked_flux = np.average(flux, weights=wl_weight, axis=0)
@@ -21,7 +21,7 @@ def _coadd_flux(wave, flux, ivar, mask=None, method="mean", weight=None):
         return np.nanmedian(flux, axis=0)
     elif method == "ivar-weighted-mean":
         wl_weight = ivar * np.expand_dims(weight, axis=-1)
-        nan_mask = (np.isnan(flux)) | (np.isnan(wl_weight))
+        nan_mask = (np.isnan(flux)) | (np.isnan(ivar)) | (ivar==0.) | (np.isnan(wl_weight))
         flux[nan_mask] = 0.0
         wl_weight[nan_mask] = 1e-10 # hack
         stacked_flux = np.average(flux, weights=wl_weight, axis=0)
@@ -29,7 +29,7 @@ def _coadd_flux(wave, flux, ivar, mask=None, method="mean", weight=None):
         return stacked_flux
     elif method == "irms-weighted-mean":
         wl_weight = ivar**0.5 * np.expand_dims(weight, axis=-1)
-        nan_mask = (np.isnan(flux)) | (np.isnan(wl_weight))
+        nan_mask = (np.isnan(flux)) | (np.isnan(ivar)) | (ivar==0.) | (np.isnan(wl_weight))
         flux[nan_mask] = 0.0
         wl_weight[nan_mask] = 1e-10 # hack
         stacked_flux = np.average(flux, weights=wl_weight, axis=0)
@@ -41,7 +41,12 @@ def bootstrap_coadd(wave, flux, ivar, mask=None, method="mean", weight=None):
         np.arange(len(flux)), replace=True, size=len(flux)
     )  # take a random sample each iteration
     boot_coadd = _coadd_flux(
-        wave, flux[boot_idx], ivar[boot_idx], mask=mask, method=method, weight=weight[boot_idx]
+        wave, 
+        flux[boot_idx]+np.random.normal(size=ivar[boot_idx].shape)*ivar[boot_idx]**-0.5, 
+        ivar[boot_idx], 
+        mask=mask, 
+        method=method, 
+        weight=weight[boot_idx]
     )  # calculate the mean for each iteration
     #plt.plot(wave, boot_coadd)
     #plt.show()
