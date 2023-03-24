@@ -26,6 +26,7 @@ def stack_spectra(
     weight=None,
     stack_method="mean",
     stack_error="bootstrap",
+    bootstrap_samples=1000,
     n_workers=-1,
 ):
     if spectra is None:
@@ -54,10 +55,15 @@ def stack_spectra(
     # Coadd cameras if needed
     if isinstance(flux, dict):
         flux, wave, ivar, mask = coadd_cameras(flux, wave, ivar, mask)
+    
+    # MW dust correct
+    flux_mwcorr = mw_dust_correct(flux, wave, fibermap["TARGET_RA"], fibermap["TARGET_DEC"], "flux")
+    ivar_mwcorr = mw_dust_correct(ivar, wave, fibermap["TARGET_RA"], fibermap["TARGET_DEC"], "ivar")
+
     # de-redshfit the spectra
-    flux_dered = deredshift(flux, redshift, stack_redshfit, "flux")
+    flux_dered = deredshift(flux_mwcorr, redshift, stack_redshfit, "flux")
     wave_dered = deredshift(wave, redshift, stack_redshfit, "wave")
-    ivar_dered = deredshift(ivar, redshift, stack_redshfit, "ivar")
+    ivar_dered = deredshift(ivar_mwcorr, redshift, stack_redshfit, "ivar")
 
     # resample the spectra to a common grid
     if output_wave_grid is None:
@@ -91,6 +97,7 @@ def stack_spectra(
         ivar_normed,
         method=stack_method,
         n_workers=n_workers,
+        weight=weight
     )
 
     return stacked_spectra, output_wave_grid
