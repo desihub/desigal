@@ -4,6 +4,7 @@ from pathlib import Path
 from joblib import Parallel, delayed
 import numpy as np
 import pandas as pd
+from astropy.io import fits
 from astropy.table import Table
 from desispec.zcatalog import find_primary_spectra
 import desispec.io
@@ -121,9 +122,8 @@ def _sel_objects_db(release, targetids, **kwargs):
             Else use use_db=False to use the slower fits table based search."""
         )
     db.log = get_logger(DEBUG)
-    postgresql = db.setup_db(
-        schema=release, hostname="nerscdb03.nersc.gov", username="desi", verbose=False
-    )
+    postgresql = db.setup_db(schema=release, hostname='specprod-db.desi.lbl.gov', username='desi')
+    
     q = (
         db.dbSession.query(
             db.Zpix.survey,
@@ -154,4 +154,36 @@ def _read_spectra(survey, program, healpix, targetid, release_path):
     spectra = desispec.io.read_spectra(data_path)
     mask = np.isin(spectra.fibermap["TARGETID"], targetid)
     spectra = spectra[mask]
+    return spectra
+
+
+# def _read_spectra(survey, program, healpix, targetid, release_path):
+#     """Read a single spectra file. Helper function of get_spectra."""
+#     data_path = (
+#         release_path
+#         / "healpix"
+#         / survey
+#         / program
+#         / str(int(healpix / 100))
+#         / str(healpix)
+#         / f"coadd-{survey}-{program}-{healpix}.fits"
+#     )
+
+#     hdus = fits.open(data_path, memap=True)
+#     mask = np.isin(hdus[1].data["TARGETID"], targetid)
+#     mask = np.where(mask)[0]
+
+#     exp_mask = np.isin(hdus[2].data["TARGETID"], targetid)
+#     exp_mask = np.where(exp_mask)[0]
+
+#     spectra = desispec.spectra.Spectra()
+#     # Doing this to avoid all the checks in the Spectra constructor
+#     spectra.wave={"b": hdus[3].data.copy(), "r": hdus[8].data.copy(), "z": hdus[13].data.copy()}
+#     spectra.flux={"b": hdus[4].data[mask].copy(),"r": hdus[9].data[mask].copy(),"z": hdus[14].data[mask].copy(),}
+#     spectra.ivar={"b": hdus[5].data[mask].copy(),"r": hdus[10].data[mask].copy(),"z": hdus[15].data[mask].copy(),}
+#     spectra.fibermap=hdus[1].data[mask].copy()
+#     spectra.exp_fibermap=hdus[2].data[exp_mask].copy()
+    ###TODO: ADD MASK and R
+    
+
     return spectra
