@@ -16,7 +16,7 @@ def _coadd_flux(wave, flux, ivar, mask=None, method="mean", weight=None):
         wl_weight[nan_mask] = 1e-10 # hack
         stacked_flux = np.average(flux, weights=wl_weight, axis=0)
         stacked_flux[np.sum(~nan_mask, axis=0)==0] = np.nan # only allow wl which is covered by at least 1 spectrum
-        stacked_ivar = np.average(ivar**-2, weights=wl_weight**2, axis=0)**-1
+        stacked_ivar = np.average(ivar**-1, weights=wl_weight**2, axis=0)**-1
         stacked_ivar[np.sum(~nan_mask, axis=0)==0] = np.nan # only allow wl which is covered by at least 1 spectrum
         return np.stack([stacked_flux, stacked_ivar], axis=-1)
     elif method == "median":
@@ -28,7 +28,7 @@ def _coadd_flux(wave, flux, ivar, mask=None, method="mean", weight=None):
         wl_weight[nan_mask] = 1e-10 # hack
         stacked_flux = np.average(flux, weights=wl_weight, axis=0)
         stacked_flux[np.sum(~nan_mask, axis=0)==0] = np.nan # only allow wl which is covered by at least 1 spectrum
-        stacked_ivar = np.average(ivar**-2, weights=wl_weight**2, axis=0)**-1
+        stacked_ivar = np.average(ivar**-1, weights=wl_weight**2, axis=0)**-1
         stacked_ivar[np.sum(~nan_mask, axis=0)==0] = np.nan # only allow wl which is covered by at least 1 spectrum
         return np.stack([stacked_flux, stacked_ivar], axis=-1)
     elif method == "irms-weighted-mean":
@@ -38,7 +38,7 @@ def _coadd_flux(wave, flux, ivar, mask=None, method="mean", weight=None):
         wl_weight[nan_mask] = 1e-10 # hack
         stacked_flux = np.average(flux, weights=wl_weight, axis=0)
         stacked_flux[np.sum(~nan_mask, axis=0)==0] = np.nan # only allow wl which is covered by at least 1 spectrum
-        stacked_ivar = np.average(ivar**-2, weights=wl_weight**2, axis=0)**-1
+        stacked_ivar = np.average(ivar**-1, weights=wl_weight**2, axis=0)**-1
         stacked_ivar[np.sum(~nan_mask, axis=0)==0] = np.nan # only allow wl which is covered by at least 1 spectrum
         return np.stack([stacked_flux, stacked_ivar], axis=-1)
 
@@ -66,19 +66,16 @@ def coadd_flux(
     mask=None,
     method="mean",
     weight=None,
-    stack_error="bootstrap",
-    n_workers=1,
+    bootstrap=True,
     bootstrap_samples=1000,
+    n_workers=1
 ):
     if np.all(weight==None):
         weight = np.ones(len(flux))
-    stack_errors = ["propagated", "bootstrap"]
-    if stack_error not in stack_errors:
-        raise ValueError(f"Coadd type must be one of {stack_errors}")
-    if stack_error == "propagated":
-        return _coadd_flux(wave, flux, ivar, mask=mask, method=method, weight=weight)
-    if stack_error == "bootstrap":
-        print('start bootstrapping!')
+    if bootstrap==False:
+        stack = _coadd_flux(wave, flux, ivar, mask=mask, method=method, weight=weight)
+        return stack[:,0], stack[:,1]
+    if bootstrap==True:
         if n_workers == 1:
             boot_averages = np.array(
                 [
@@ -88,7 +85,6 @@ def coadd_flux(
                     for _ in range(bootstrap_samples)
                 ]
             )
-            print(boot_averages.shape)
             return np.nanmean(boot_averages[:,:,0], axis=0), np.nanmean(boot_averages[:,:,1], axis=0)
         else:
             boot_averages = np.array(
@@ -99,5 +95,4 @@ def coadd_flux(
                     for _ in range(bootstrap_samples)
                 )
             )
-            print(boot_averages.shape)
             return np.nanmean(boot_averages[:,:,0], axis=0), np.nanmean(boot_averages[:,:,1], axis=0)

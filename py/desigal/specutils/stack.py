@@ -25,7 +25,7 @@ def stack_spectra(
     stack_redshift=0.0,
     weight=None,
     stack_method="mean",
-    stack_error="bootstrap",
+    bootstrap=True,
     bootstrap_samples=1000,
     n_workers=-1,
 ):
@@ -96,9 +96,10 @@ def stack_spectra(
         flux_normed,
         ivar_normed,
         method=stack_method,
-        n_workers=n_workers,
         weight=weight,
-        bootstrap_samples=bootstrap_samples
+        bootstrap=bootstrap,
+        bootstrap_samples=bootstrap_samples,
+        n_workers=n_workers
     )
 
     return stacked_spectra, output_wave_grid
