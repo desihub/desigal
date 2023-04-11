@@ -81,7 +81,7 @@ def coadd_flux(
                     for _ in range(bootstrap_samples)
                 ]
             )
-            return np.nanmean(boot_averages, axis=0), np.nanstd(boot_averages, axis=0)
+            return np.nanmean(boot_averages, axis=0), np.nanvar(boot_averages, axis=0)**-1
         else:
             boot_averages = np.array(
                 Parallel(n_jobs=n_workers)(
