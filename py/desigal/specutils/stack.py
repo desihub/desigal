@@ -22,7 +22,7 @@ def stack_spectra(
     resample_method="linear",
     norm_method="median",
     norm_flux_window=None,
-    stack_redshfit=0.0,
+    stack_redshift=0.0,
     weight=None,
     stack_method="mean",
     stack_error="bootstrap",
@@ -61,9 +61,9 @@ def stack_spectra(
     ivar_mwcorr = mw_dust_correct(ivar, wave, fibermap["TARGET_RA"], fibermap["TARGET_DEC"], "ivar")
 
     # de-redshfit the spectra
-    flux_dered = deredshift(flux_mwcorr, redshift, stack_redshfit, "flux")
-    wave_dered = deredshift(wave, redshift, stack_redshfit, "wave")
-    ivar_dered = deredshift(ivar_mwcorr, redshift, stack_redshfit, "ivar")
+    flux_dered = deredshift(flux_mwcorr, redshift, stack_redshift, "flux")
+    wave_dered = deredshift(wave, redshift, stack_redshift, "wave")
+    ivar_dered = deredshift(ivar_mwcorr, redshift, stack_redshift, "ivar")
 
     # resample the spectra to a common grid
     if output_wave_grid is None:
@@ -97,7 +97,8 @@ def stack_spectra(
         ivar_normed,
         method=stack_method,
         n_workers=n_workers,
-        weight=weight
+        weight=weight,
+        bootstrap_samples=bootstrap_samples
     )
 
     return stacked_spectra, output_wave_grid
