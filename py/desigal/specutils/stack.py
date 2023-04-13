@@ -103,3 +103,107 @@ def stack_spectra(
     )
 
     return stacked_spectra, output_wave_grid
+
+def write_binned_stacks(
+    outfile,
+    wave,
+    flux,
+    ivar,
+    resolution=None,
+    stackids=None,
+    stack_redshift=None,
+    table_column_dict={},
+    table_format_dict={},
+):
+    """
+    Save spectra to a fits file compatible with FastSpecFit stackfit
+
+    Parameters
+    ----------
+    outfile : str
+        Path and file name to save the fits file.
+    wave : np.array
+        1-Dimensional numpy array of the wavelength values of the spectra
+    flux : np.array
+        2-Dimensional numpy array of the flux values
+    ivar : np.array
+        1-Dimensional numpy array of the ivar values
+    resolution : np.array
+        3-Dimensional numpy array of the resolution matrices of the spectra. Saved in the same format as in desispec.resolution.Resolution: array[nspec, ndiag, nwave]
+    stackids : np.array
+        1-Dimensional numpy array of unique stackids. Default np.arange(nspec)
+    stack_redshift : np.array
+        1-Dimensional numpy array of the redshifts of the stacks. Default np.zeros(nspec)
+    table_column_dict : dict
+        Dictionary with column names(keys) and data to be included in the fits file.
+    table_format_dict : dict
+        Dictionary with column names(keys) and formats of the columns to be included in the fits file.
+    Returns
+    -------
+    Nothing
+        Saves spectra to fits file.
+    """
+    from astropy.io import fits
+
+    nobj, _ = flux.shape
+    if np.all(stackids == None):
+        stackids = np.arange(nobj)
+    if np.all(stack_redshift == None):
+        stack_redshift = np.zeros(nobj)
+
+    hdulist = []
+
+    hdr = fits.Header()
+    hdr[
+        "COMMENT"
+    ] = "Stack file created using desihub.desigal function write_binned_stacks"
+    empty_primary = fits.PrimaryHDU(header=hdr)
+    hdulist.append(empty_primary)
+
+    hduflux = fits.ImageHDU(flux.astype("f4"))
+    hduflux.header["EXTNAME"] = "FLUX"
+    hdulist.append(hduflux)
+
+    hduivar = fits.ImageHDU(ivar.astype("f4"))
+    hduivar.header["EXTNAME"] = "IVAR"
+    hdulist.append(hduivar)
+
+    hduwave = fits.ImageHDU(wave.astype("f8"))
+    hduwave.header["EXTNAME"] = "WAVE"
+    hduwave.header["BUNIT"] = "Angstrom"
+    hduwave.header["AIRORVAC"] = ("vac", "vacuum wavelengths")
+    hdulist.append(hduwave)
+
+    if ~np.all(resolution == None):
+        hdures = fits.ImageHDU(resolution.astype("f4"))
+        hdures.header["EXTNAME"] = "RES"
+        hdulist.append(hdures)
+
+    c1 = fits.Column(name="STACKID", array=stackids, format="K")
+    c2 = fits.Column(name="Z", array=stack_redshift, format="D")
+    columns = [c1, c2]
+    for key in table_column_dict.keys():
+        if table_format_dict[key][0] == "P":
+            columns.append(
+                fits.Column(
+                    name=key,
+                    array=np.array(table_column_dict[key], dtype="object"),
+                    format=table_format_dict[key],
+                )
+            )
+        else:
+            columns.append(
+                fits.Column(
+                    name=key,
+                    array=table_column_dict[key],
+                    format=table_format_dict[key],
+                )
+            )
+
+    hdutable = fits.BinTableHDU.from_columns(columns)
+    hdutable.header["EXTNAME"] = "STACKINFO"
+    hdulist.append(hdutable)
+
+    hx = fits.HDUList(hdulist)
+
+    hx.writeto(outfile, overwrite=True, checksum=True)
