@@ -13,7 +13,7 @@ from desiutil.log import get_logger, DEBUG
 import desispec.database.redshift as db
 
 
-def get_spectra(targetids, release, n_workers=-1, use_db=True, **kwargs):
+def get_spectra(targetids, release, n_workers=-1, use_db=True, zcat_table=None, **kwargs):
     """
     Get spectra for a list of targetids.
     Uses desispec.zcatalog.find_primary_spectra to find the primary spectra for each targetid.
@@ -30,6 +30,9 @@ def get_spectra(targetids, release, n_workers=-1, use_db=True, **kwargs):
     use_db : bool, optional
         Use the desi redshift database to get the list of spectra files, by default True.
         Needs an initial setup of the `~/.pgpass` file. See https://desi.lbl.gov/trac/wiki/DESIProductionDatabase#Setuppgpass
+    zcat_table : astropy.Table.table, optional
+        Use pre-loaded zcat table to get the list of spectra files. This is only used when 
+        use_dp=False and a zcat_table is specified.
     Returns
     -------
     desispec.spectra.Spectra
@@ -45,6 +48,8 @@ def get_spectra(targetids, release, n_workers=-1, use_db=True, **kwargs):
 
     if use_db:
         sel_data = _sel_objects_db(release, targetids)
+    elif ~(zcat_table is None):
+        sel_data = _sel_objects_table(zcat_table, targetids)
     else:
         sel_data = _sel_objects_fits(release, release_path, targetids)
 
@@ -91,6 +96,30 @@ def _sel_objects_fits(release, release_path, targetids, **kwargs):
     select_mask = np.isin(all_data["TARGETID"].value, targetids)
     sel_data = all_data[select_mask]
     del all_data
+
+    if "ZCAT_PRIMARY" not in sel_data.colnames:
+        sel_data["ZCAT_NSPEC"] = 0
+        sel_data["ZCAT_PRIMARY"] = 0
+
+        nspec, specprim = find_primary_spectra(sel_data, **kwargs)
+        sel_data["ZCAT_NSPEC"] = nspec  # number of spectra for this object in catalog
+        sel_data[
+            "ZCAT_PRIMARY"
+        ] = specprim  # True/False if this is the primary spectrum in catalog
+
+    sel_data = sel_data[sel_data["ZCAT_PRIMARY"]]
+    sel_data = sel_data[["SURVEY", "PROGRAM", "HEALPIX", "TARGETID"]].to_pandas()
+    for col, dtype in sel_data.dtypes.items():
+        if dtype == np.object:  # Only process object columns.
+            # decode, or return original value if decode return Nan
+            sel_data[col] = sel_data[col].str.decode("utf-8")
+
+    return sel_data
+
+def _sel_objects_table(table, targetids, **kwargs):
+    """Select objects from the table. Helper function of get_spectra."""
+    select_mask = np.isin(table["TARGETID"].value, targetids)
+    sel_data = table[select_mask]
 
     if "ZCAT_PRIMARY" not in sel_data.colnames:
         sel_data["ZCAT_NSPEC"] = 0
