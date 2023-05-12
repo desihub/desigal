@@ -16,7 +16,7 @@ def _coadd_flux(wave, flux, ivar, mask=None, method="mean", weight=None):
         wl_weight[nan_mask] = 1e-10 # hack
         stacked_flux = np.average(flux, weights=wl_weight, axis=0)
         stacked_flux[np.sum(~nan_mask, axis=0)==0] = np.nan # only allow wl which is covered by at least 1 spectrum
-        stacked_ivar = np.average(ivar**-1, weights=wl_weight**2, axis=0)**-1
+        stacked_ivar = np.sum(wl_weight, axis=0)
         stacked_ivar[np.sum(~nan_mask, axis=0)==0] = np.nan # only allow wl which is covered by at least 1 spectrum
         return np.stack([stacked_flux, stacked_ivar], axis=-1)
     elif method == "median":
@@ -28,7 +28,7 @@ def _coadd_flux(wave, flux, ivar, mask=None, method="mean", weight=None):
         wl_weight[nan_mask] = 1e-10 # hack
         stacked_flux = np.average(flux, weights=wl_weight, axis=0)
         stacked_flux[np.sum(~nan_mask, axis=0)==0] = np.nan # only allow wl which is covered by at least 1 spectrum
-        stacked_ivar = np.average(ivar**-1, weights=wl_weight**2, axis=0)**-1
+        stacked_ivar = np.sum(wl_weight, axis=0)
         stacked_ivar[np.sum(~nan_mask, axis=0)==0] = np.nan # only allow wl which is covered by at least 1 spectrum
         return np.stack([stacked_flux, stacked_ivar], axis=-1)
     elif method == "irms-weighted-mean":
@@ -38,7 +38,7 @@ def _coadd_flux(wave, flux, ivar, mask=None, method="mean", weight=None):
         wl_weight[nan_mask] = 1e-10 # hack
         stacked_flux = np.average(flux, weights=wl_weight, axis=0)
         stacked_flux[np.sum(~nan_mask, axis=0)==0] = np.nan # only allow wl which is covered by at least 1 spectrum
-        stacked_ivar = np.average(ivar**-1, weights=wl_weight**2, axis=0)**-1
+        stacked_ivar = np.sum(wl_weight, axis=0)
         stacked_ivar[np.sum(~nan_mask, axis=0)==0] = np.nan # only allow wl which is covered by at least 1 spectrum
         return np.stack([stacked_flux, stacked_ivar], axis=-1)
 
