@@ -283,7 +283,7 @@ def read_single_spectrum(infile, targetid, single=False):
                     mask = {}
                 mask[band] = native_endian(hdus[h][targetrow:targetrow+1, :].astype(np.uint32))
             else:
-                continue
+                pass
     hdus.close()
     duration = time.time() - t0
     log.info(iotime.format('read', infile, duration))
