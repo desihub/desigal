@@ -13,6 +13,7 @@ def _coadd_flux(wave, flux, ivar, mask=None, method="mean", weight=None):
         wl_weight = np.ones_like(flux) * np.expand_dims(weight, axis=-1)
         nan_mask = (np.isnan(flux)) | (np.isnan(ivar)) | (ivar==0.) | (np.isnan(wl_weight))
         flux[nan_mask] = 0.0
+        ivar[nan_mask] = 1e-10 # hack
         wl_weight[nan_mask] = 1e-10 # hack
         stacked_flux = np.average(flux, weights=wl_weight, axis=0)
         stacked_flux[np.sum(~nan_mask, axis=0)==0] = np.nan # only allow wl which is covered by at least 1 spectrum
@@ -25,6 +26,7 @@ def _coadd_flux(wave, flux, ivar, mask=None, method="mean", weight=None):
         wl_weight = ivar * np.expand_dims(weight, axis=-1)
         nan_mask = (np.isnan(flux)) | (np.isnan(ivar)) | (ivar==0.) | (np.isnan(wl_weight))
         flux[nan_mask] = 0.0
+        ivar[nan_mask] = 1e-10 # hack
         wl_weight[nan_mask] = 1e-10 # hack
         stacked_flux = np.average(flux, weights=wl_weight, axis=0)
         stacked_flux[np.sum(~nan_mask, axis=0)==0] = np.nan # only allow wl which is covered by at least 1 spectrum
@@ -35,6 +37,7 @@ def _coadd_flux(wave, flux, ivar, mask=None, method="mean", weight=None):
         wl_weight = ivar**0.5 * np.expand_dims(weight, axis=-1)
         nan_mask = (np.isnan(flux)) | (np.isnan(ivar)) | (ivar==0.) | (np.isnan(wl_weight))
         flux[nan_mask] = 0.0
+        ivar[nan_mask] = 1e-10 # hack
         wl_weight[nan_mask] = 1e-10 # hack
         stacked_flux = np.average(flux, weights=wl_weight, axis=0)
         stacked_flux[np.sum(~nan_mask, axis=0)==0] = np.nan # only allow wl which is covered by at least 1 spectrum
