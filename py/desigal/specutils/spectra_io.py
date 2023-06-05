@@ -1,15 +1,25 @@
 import os
+import re
+import time
 import multiprocessing
 from pathlib import Path
 from joblib import Parallel, delayed
 import numpy as np
 import pandas as pd
+import fitsio
 from astropy.io import fits
 from astropy.table import Table
-from desispec.zcatalog import find_primary_spectra
-import desispec.io
-import desispec.spectra
+
+from desiutil.io import encode_table
 from desiutil.log import get_logger, DEBUG
+
+import desispec.io
+from desispec.io.util import native_endian, checkgzip
+from desispec.io import iotime
+from desispec.io.util import native_endian, checkgzip
+from desispec.io import iotime
+from desispec.zcatalog import find_primary_spectra
+from desispec.spectra import Spectra, stack
 import desispec.database.redshift as db
 
 
@@ -48,7 +58,7 @@ def get_spectra(targetids, release, n_workers=-1, use_db=True, zcat_table=None, 
 
     if use_db:
         sel_data = _sel_objects_db(release, targetids)
-    elif ~(zcat_table is None):
+    elif (zcat_table is not None):
         sel_data = _sel_objects_table(zcat_table, targetids)
     else:
         sel_data = _sel_objects_fits(release, release_path, targetids)
@@ -60,7 +70,6 @@ def get_spectra(targetids, release, n_workers=-1, use_db=True, zcat_table=None, 
         raise ValueError(
             "Spectra for target ids {targetids[~found_targets_bool]} not found!"
         )
-
     # adding special case so as to have the option to parallelize externally
     if n_workers == 1:
         sel_spectra = [
@@ -71,7 +80,7 @@ def get_spectra(targetids, release, n_workers=-1, use_db=True, zcat_table=None, 
                 sel_data["HEALPIX"],
                 sel_data["TARGETID"],
             )
-        ]
+        ]    
     else:
         sel_spectra = Parallel(n_jobs=n_workers)(
             delayed(_read_spectra)(survey, program, healpix, targetid, release_path)
@@ -81,8 +90,8 @@ def get_spectra(targetids, release, n_workers=-1, use_db=True, zcat_table=None, 
                 sel_data["HEALPIX"],
                 sel_data["TARGETID"],
             )
-        )
-    return desispec.spectra.stack(sel_spectra)
+        )    
+    return stack(sel_spectra)
 
 
 def _sel_objects_fits(release, release_path, targetids, **kwargs):
@@ -180,10 +189,110 @@ def _read_spectra(survey, program, healpix, targetid, release_path):
         / str(healpix)
         / f"coadd-{survey}-{program}-{healpix}.fits"
     )
-    spectra = desispec.io.read_spectra(data_path)
-    mask = np.isin(spectra.fibermap["TARGETID"], targetid)
-    spectra = spectra[mask]
+    spectra = read_single_spectrum(data_path, targetid)
+    #spectra = desispec.io.read_spectra(data_path, targetid)
+    #mask = np.isin(spectra.fibermap["TARGETID"], targetid)
+    #spectra = spectra[mask]
     return spectra
+
+
+def read_single_spectrum(infile, targetid, single=False):
+    """
+    Read Spectra object from FITS file.
+
+    This reads data written by the write_spectra function.  A new Spectra
+    object is instantiated and returned.
+
+    Args:
+        infile (str): path to read
+        single (bool): if True, keep spectra as single precision in memory.
+
+    Returns (Spectra):
+        The object containing the data read from disk.
+
+    """
+    log = get_logger()
+    infile = checkgzip(infile)
+    ftype = np.float64
+    if single:
+        ftype = np.float32
+
+    infile = os.path.abspath(infile)
+    if not os.path.isfile(infile):
+        raise IOError("{} is not a file".format(infile))
+
+    t0 = time.time()
+    hdus = fitsio.FITS(infile, mode='r')
+
+    targetrow = np.argwhere(hdus["FIBERMAP"].read(columns="TARGETID")==targetid)
+    nhdu = len(hdus)
+
+    # load the metadata.
+
+    meta = dict(hdus[0].read_header())
+
+    # initialize data objects
+
+    bands = []
+    fmap = None
+    expfmap = None
+    wave = None
+    flux = None
+    ivar = None
+    mask = None
+    res = None
+    extra = None
+    extra_catalog = None
+    scores = None
+
+    # For efficiency, go through the HDUs in disk-order.  Use the
+    # extension name to determine where to put the data.  We don't
+    # explicitly copy the data, since that will be done when constructing
+    # the Spectra object.
+
+    for h in range(1, nhdu):
+        name = hdus[h].read_header()["EXTNAME"]
+        if name == "FIBERMAP":
+            fmap = hdus[h].read(rows=targetrow, columns=["TARGETID", "TARGET_RA", "TARGET_DEC"])
+        elif (name == "EXP_FIBERMAP") or (name == "SCORES") or (name == 'EXTRA_CATALOG'):
+            continue
+        else:
+            # Find the band based on the name
+            mat = re.match(r"(.*)_(.*)", name)
+            if mat is None:
+                raise RuntimeError("FITS extension name {} does not contain the band".format(name))
+            band = mat.group(1).lower()
+            type = mat.group(2)
+            if band not in bands:
+                bands.append(band)
+            if type == "WAVELENGTH":
+                if wave is None:
+                    wave = {}
+                #- Note: keep original float64 resolution for wavelength
+                wave[band] = native_endian(hdus[h].read())
+            elif type == "FLUX":
+                if flux is None:
+                    flux = {}
+                flux[band] = native_endian(hdus[h][targetrow:targetrow+1, :].astype(ftype))
+            elif type == "IVAR":
+                if ivar is None:
+                    ivar = {}
+                ivar[band] = native_endian(hdus[h][targetrow:targetrow+1, :].astype(ftype))
+            elif type == "MASK":
+                if mask is None:
+                    mask = {}
+                mask[band] = native_endian(hdus[h][targetrow:targetrow+1, :].astype(np.uint32))
+            else:
+                pass
+    hdus.close()
+    duration = time.time() - t0
+    log.info(iotime.format('read', infile, duration))
+
+    # Construct the Spectra object from the data.  If there are any
+    # inconsistencies in the sizes of the arrays read from the file,
+    # they will be caught by the constructor.
+    spec = Spectra(bands, wave, flux, ivar, mask=mask,fibermap=fmap)
+    return spec
 
 
 # def _read_spectra(survey, program, healpix, targetid, release_path):
