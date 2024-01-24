@@ -65,6 +65,10 @@ def get_spectra(targetids, release, n_workers=-1, use_db=True, zcat_table=None, 
 
     sel_data = sel_data.set_index("TARGETID", drop=False)
     sel_data = sel_data.loc[targetids]
+    sel_data = Table.from_pandas(sel_data)
+    file_sorted = sel_data.argsort(keys=["SURVEY","PROGRAM","HEALPIX","TARGETID"])
+    inverse_sorted = np.argsort(file_sorted)
+    sel_data = sel_data[file_sorted]
     found_targets_bool = np.isin(targetids, sel_data["TARGETID"])
     if ~np.all(found_targets_bool):
         raise ValueError(
@@ -91,7 +95,7 @@ def get_spectra(targetids, release, n_workers=-1, use_db=True, zcat_table=None, 
                 sel_data["TARGETID"],
             )
         )    
-    return stack(sel_spectra)
+    return stack(np.array(sel_spectra)[inverse_sorted])
 
 
 def _sel_objects_fits(release, release_path, targetids, **kwargs):
@@ -189,23 +193,49 @@ def _read_spectra(survey, program, healpix, targetid, release_path):
         / str(healpix)
         / f"coadd-{survey}-{program}-{healpix}.fits"
     )
-    spectra = read_single_spectrum(data_path, targetid)
+    print(data_path)
+    spectra = read_single_spectrum(
+        data_path, 
+        targetid, 
+        read_hdu={
+            "FIBERMAP": True,
+            "EXP_FIBERMAP": False,
+            "SCORES": False,
+            "EXTRA_CATALOG": False,
+            "MASK": False,
+            "RESOLUTION": False,
+        }
+    )
     #spectra = desispec.io.read_spectra(data_path, targetid)
     #mask = np.isin(spectra.fibermap["TARGETID"], targetid)
     #spectra = spectra[mask]
     return spectra
 
 
-def read_single_spectrum(infile, targetid, single=False):
+def read_single_spectrum(
+    infile,
+    targetid,
+    single=False,
+    read_hdu={
+        "FIBERMAP": False,
+        "EXP_FIBERMAP": False,
+        "SCORES": False,
+        "EXTRA_CATALOG": False,
+        "MASK": False,
+        "RESOLUTION": False,
+        },
+    ):    
     """
-    Read Spectra object from FITS file.
+    Read single spectrum as Spectra object from FITS file.
 
     This reads data written by the write_spectra function.  A new Spectra
     object is instantiated and returned.
 
     Args:
         infile (str): path to read
+        targetid (int): targetid of the spectrum to read
         single (bool): if True, keep spectra as single precision in memory.
+        read_hdu (dict): Dict with hdu names as keys to skip or read hdu.
 
     Returns (Spectra):
         The object containing the data read from disk.
@@ -249,13 +279,21 @@ def read_single_spectrum(infile, targetid, single=False):
     # extension name to determine where to put the data.  We don't
     # explicitly copy the data, since that will be done when constructing
     # the Spectra object.
-
+            
     for h in range(1, nhdu):
         name = hdus[h].read_header()["EXTNAME"]
         if name == "FIBERMAP":
-            fmap = hdus[h].read(rows=targetrow, columns=["TARGETID", "TARGET_RA", "TARGET_DEC"])
-        elif (name == "EXP_FIBERMAP") or (name == "SCORES") or (name == 'EXTRA_CATALOG'):
-            continue
+            if read_hdu["FIBERMAP"]:
+                fmap = encode_table(Table(hdus[h].read(rows=targetrow), copy=True).as_array())
+        elif name == "EXP_FIBERMAP":
+            if read_hdu["EXP_FIBERMAP"]:
+                expfmap = encode_table(Table(hdus[h].read(rows=targetrow), copy=True).as_array())
+        elif name == "SCORES":
+            if read_hdu["SCORES"]:
+                scores = encode_table(Table(hdus[h].read(rows=targetrow), copy=True).as_array())
+        elif name == "EXTRA_CATALOG":
+            if read_hdu["EXTRA_CATALOG"]:
+                extra_catalog = encode_table(Table(hdus[h].read(rows=targetrow), copy=True).as_array())
         else:
             # Find the band based on the name
             mat = re.match(r"(.*)_(.*)", name)
@@ -278,10 +316,14 @@ def read_single_spectrum(infile, targetid, single=False):
                 if ivar is None:
                     ivar = {}
                 ivar[band] = native_endian(hdus[h][targetrow:targetrow+1, :].astype(ftype))
-            elif type == "MASK":
+            elif type == "MASK" and read_hdu["MASK"]:
                 if mask is None:
                     mask = {}
                 mask[band] = native_endian(hdus[h][targetrow:targetrow+1, :].astype(np.uint32))
+            elif type == "RESOLUTION" and read_hdu["RESOLUTION"]:
+                if res is None:
+                    res = {}
+                res[band] = native_endian(hdus[h][targetrow:targetrow+1, :, :].astype(ftype))
             else:
                 pass
     hdus.close()
@@ -291,7 +333,10 @@ def read_single_spectrum(infile, targetid, single=False):
     # Construct the Spectra object from the data.  If there are any
     # inconsistencies in the sizes of the arrays read from the file,
     # they will be caught by the constructor.
-    spec = Spectra(bands, wave, flux, ivar, mask=mask,fibermap=fmap)
+    spec = Spectra(bands, wave, flux, ivar, mask=mask, resolution_data=res,
+        fibermap=fmap, exp_fibermap=expfmap,
+        meta=meta, extra=extra, extra_catalog=extra_catalog,
+        single=single, scores=scores)
     return spec
 
 
