@@ -88,23 +88,23 @@ def stack_spectra(
         n_workers=n_workers,
     )
     
-    if norm_method=='flux-window':
-        # Check if spectra can be normalized.
-        wpad = 2 * np.median(np.abs(np.diff(output_wave_grid)))
-        if np.min(output_wave_grid) > (norm_flux_window[0] - wpad) or np.max(output_wave_grid) < (norm_flux_window[1] + wpad):
-            raise ValueError("Flux window is outside of wavelength range.")
+    # Check if spectra can be normalized.
+    wpad = 2 * np.median(np.abs(np.diff(output_wave_grid)))
+    if np.min(output_wave_grid) > (norm_flux_window[0] - wpad) or np.max(output_wave_grid) < (norm_flux_window[1] + wpad):
+        raise ValueError("Flux window is outside of wavelength range.")
 
-        wave_mask = np.tile(np.expand_dims(
-            (output_wave_grid > (norm_flux_window[0] - wpad)) * (output_wave_grid < (norm_flux_window[1] + wpad))
-            , axis=0), (len(flux_grid),1))
-        total_mask = np.all(
-            [
-                wave_mask,
-                ivar_grid > 0,
-                np.isfinite(flux_grid),
-            ],
-            axis=0,
-        )
+    wave_mask = np.tile(np.expand_dims(
+        (output_wave_grid > (norm_flux_window[0] - wpad)) * (output_wave_grid < (norm_flux_window[1] + wpad))
+        , axis=0), (len(flux_grid),1))
+    total_mask = np.all(
+        [
+            wave_mask,
+            ivar_grid > 0,
+            np.isfinite(flux_grid),
+        ],
+        axis=0,
+    )
+    if norm_method=='flux-window':
         norm_mask = np.sum(total_mask, axis=1) / np.sum(wave_mask, axis=1) > 0.8
         if np.any(~norm_mask):
             print('The following spectra were excluded as they could not be normalized: ', list(spectra.target_ids()[~norm_mask]))
