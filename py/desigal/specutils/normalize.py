@@ -15,7 +15,6 @@ import numpy.ma as ma
 from scipy import integrate, interpolate
 from joblib import Parallel, delayed
 
-
 def integrate_flux(wave, flux, ivar, w1, w2):
     """ Current assumption is fluxes are on same grid, need to make it more general """
     # trim for speed
@@ -39,10 +38,10 @@ def integrate_flux(wave, flux, ivar, w1, w2):
     flux = flux[total_mask]
     ivar = ivar[total_mask]
     # should never have to extrapolate
-    f = interpolate.interp1d(wave, flux, bounds_error=True, axis=-1)
+    f = interpolate.interp1d(wave, flux, bounds_error=False, fill_value='extrapolate', axis=-1)
     f1 = f(w1)
     f2 = f(w2)
-    i = interpolate.interp1d(wave, ivar, bounds_error=True, axis=-1)
+    i = interpolate.interp1d(wave, ivar, bounds_error=False, fill_value='extrapolate', axis=-1)
     i1 = i(w1)
     i2 = i(w2)
     # insert the boundary wavelengths then integrate
@@ -105,6 +104,13 @@ def flux_window_normalize(wave, flux, ivar, flux_window, mask=None, n_workers=1)
 
     return flux / norm[:, None], ivar * norm[:, None] ** 2
 
+def luminosity_normalize(wave, flux, ivar, redshift, mask=None, cosmo=None):
+    if cosmo==None:
+        raise ValueError(f"None is not a valid cosmology. Add a cosmology to perform luminosity normalization.")
+    mpc_to_cm = 3.08567758e24
+    dist = cosmo.comoving_radial_distance(redshift) * (1.0+redshift) * mpc_to_cm
+    norm = 4*np.pi*np.expand_dims(dist, axis=-1)**2 * 1e-17 * 1e-39
+    return flux * norm, ivar / norm**2
 
 def continuum_normalize(wave, flux, ivar, mask=None):
     raise NotImplementedError
@@ -115,9 +121,9 @@ def iterative_normalize(wave, flux, ivar, mask=None):
 
 
 def normalize(
-    wave, flux, ivar, mask=None, method="median", flux_window=None, n_workers=1
+    wave, flux, ivar, redshift=None, mask=None, method="median", flux_window=None, n_workers=1, cosmo=None
 ):
-    if method not in ["mean", "median", "flux-window", "continuum", "iterative"]:
+    if method not in ["mean", "median", "flux-window", "luminosity", "continuum", "iterative"]:
         raise ValueError(f"Unknown normalization method: {method}")
     if mask is not None:
         flux[mask] = np.nan
@@ -130,6 +136,8 @@ def normalize(
         return flux_window_normalize(
             wave, flux, ivar, flux_window=flux_window, n_workers=n_workers
         )
+    elif method == "luminosity":
+        return luminosity_normalize(wave, flux, ivar, redshift, mask=mask, cosmo=cosmo)
     elif method == "continuum":
         return continuum_normalize(wave, flux, ivar)
     elif method == "iterative":

@@ -28,6 +28,9 @@ def stack_spectra(
     bootstrap=True,
     bootstrap_samples=1000,
     n_workers=-1,
+    return_normed_spectra=False,
+    multiplication_factor = None,
+    cosmo=None,
 ):
     if spectra is None:
         if (flux is None) or (wave is None):
@@ -54,7 +57,12 @@ def stack_spectra(
 
     # Coadd cameras if needed
     if isinstance(flux, dict):
-        flux, wave, ivar, mask = coadd_cameras(flux, wave, ivar, mask)
+        flux, wave, ivar = coadd_cameras(flux, wave, ivar, mask)
+    
+    # Multiply spectra if wanted
+    if multiplication_factor is not None:
+        flux = flux*multiplication_factor
+        ivar = ivar*multiplication_factor**-2
     
     # MW dust correct
     flux_mwcorr = mw_dust_correct(flux, wave, fibermap["TARGET_RA"], fibermap["TARGET_DEC"], "flux")
@@ -79,15 +87,41 @@ def stack_spectra(
         method=resample_method,
         n_workers=n_workers,
     )
+    
+    if norm_method=='flux-window':
+        # Check if spectra can be normalized.
+        wpad = 2 * np.median(np.abs(np.diff(output_wave_grid)))
+        if np.min(output_wave_grid) > (norm_flux_window[0] - wpad) or np.max(output_wave_grid) < (norm_flux_window[1] + wpad):
+            raise ValueError("Flux window is outside of wavelength range.")
+
+        wave_mask = np.tile(np.expand_dims(
+            (output_wave_grid > (norm_flux_window[0] - wpad)) * (output_wave_grid < (norm_flux_window[1] + wpad))
+            , axis=0), (len(flux_grid),1))
+        total_mask = np.all(
+            [
+                wave_mask,
+                ivar_grid > 0,
+                np.isfinite(flux_grid),
+            ],
+            axis=0,
+        )
+        norm_mask = np.sum(total_mask, axis=1) / np.sum(wave_mask, axis=1) > 0.8
+        if np.any(~norm_mask):
+            print('The following spectra were excluded as they could not be normalized: ', list(spectra.target_ids()[~norm_mask]))
+    else:
+        norm_mask = np.ones_like(np.sum(total_mask, axis=1), dtype='bool')
+        
     # Normalize the spectra
     flux_normed, ivar_normed = normalize(
         output_wave_grid,
-        flux_grid,
-        ivar_grid,
+        flux_grid[norm_mask],
+        ivar_grid[norm_mask],
+        redshift=redshift[norm_mask],
         mask=mask,
         method=norm_method,
         flux_window=norm_flux_window,
         n_workers=n_workers,
+        cosmo=cosmo,
     )
 
     # stack the spectra
@@ -101,8 +135,10 @@ def stack_spectra(
         bootstrap_samples=bootstrap_samples,
         n_workers=n_workers
     )
-
-    return stacked_spectra, output_wave_grid
+    if return_normed_spectra:
+        return stacked_spectra, output_wave_grid, np.stack([flux_normed, ivar_normed])
+    else:
+        return stacked_spectra, output_wave_grid
 
 def write_binned_stacks(
     outfile,
