@@ -150,9 +150,8 @@ def write_binned_stacks(
     stack_redshift=None,
     table_column_dict={},
     table_format_dict={},
-):
-    """
-    Save spectra to a fits file compatible with FastSpecFit stackfit
+    stackinfo=None):
+    """Save spectra to a fits file compatible with FastSpecFit stackfit
 
     Parameters
     ----------
@@ -174,10 +173,15 @@ def write_binned_stacks(
         Dictionary with column names(keys) and data to be included in the fits file.
     table_format_dict : dict
         Dictionary with column names(keys) and formats of the columns to be included in the fits file.
+    stackinfo : astropy.table.Table
+        Astropy Table of "info" to write out in tandem with the spectra. If
+        present, `table_column_dict` and `table_format_dict` are ignored.
+    
     Returns
     -------
     Nothing
         Saves spectra to fits file.
+
     """
     from astropy.io import fits
 
@@ -215,28 +219,32 @@ def write_binned_stacks(
         hdures.header["EXTNAME"] = "RES"
         hdulist.append(hdures)
 
-    c1 = fits.Column(name="STACKID", array=stackids, format="K")
-    c2 = fits.Column(name="Z", array=stack_redshift, format="D")
-    columns = [c1, c2]
-    for key in table_column_dict.keys():
-        if table_format_dict[key][0] == "P":
-            columns.append(
-                fits.Column(
-                    name=key,
-                    array=np.array(table_column_dict[key], dtype="object"),
-                    format=table_format_dict[key],
+    if stackinfo is not None:
+        hdutable = fits.convenience.table_to_hdu(stackinfo)
+    else:
+        c1 = fits.Column(name="STACKID", array=stackids, format="K")
+        c2 = fits.Column(name="Z", array=stack_redshift, format="D")
+        columns = [c1, c2]
+        for key in table_column_dict.keys():
+            if table_format_dict[key][0] == "P":
+                columns.append(
+                    fits.Column(
+                        name=key,
+                        array=np.array(table_column_dict[key], dtype="object"),
+                        format=table_format_dict[key],
+                    )
                 )
-            )
-        else:
-            columns.append(
-                fits.Column(
-                    name=key,
-                    array=table_column_dict[key],
-                    format=table_format_dict[key],
+            else:
+                columns.append(
+                    fits.Column(
+                        name=key,
+                        array=table_column_dict[key],
+                        format=table_format_dict[key],
+                    )
                 )
-            )
-
-    hdutable = fits.BinTableHDU.from_columns(columns)
+    
+        hdutable = fits.BinTableHDU.from_columns(columns)
+        
     hdutable.header["EXTNAME"] = "STACKINFO"
     hdulist.append(hdutable)
 
