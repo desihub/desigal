@@ -197,7 +197,7 @@ def resample(
             wave_new, wave, flux, ivar, fill_val=np.nan, n_workers=n_workers
         )
     elif method == "flux-cons":
-        return sn_conserving_resample(
+        return flux_conserving_resample(
             wave_new, wave, flux, ivar, fill_val=np.nan, n_workers=n_workers
         )
     elif method == "spectroperfection":
