@@ -44,7 +44,11 @@ def stack_spectra(
     if n_workers <= 0:
         n_workers = multiprocessing.cpu_count()
     else:
-        n_workers = min(int(n_workers), multiprocessing.cpu_count())
+        n_workers = min(int(n_workers), multiprocessing.cpu_count() // 2)
+
+    ## hack!
+    #from desispec.coaddition import coadd_cameras
+    #spectra = coadd_cameras(spectra)
 
     # unpack the desispec.spectra.Spectra object
     if spectra is not None:
@@ -53,16 +57,16 @@ def stack_spectra(
         ivar = spectra.ivar
         mask = spectra.mask
         fibermap = spectra.fibermap
-        exp_fibermap = spectra.exp_fibermap
+        #exp_fibermap = spectra.exp_fibermap
 
     # Coadd cameras if needed
     if isinstance(flux, dict):
-        flux, wave, ivar = coadd_cameras(flux, wave, ivar, mask)
+        flux, wave, ivar, mask = coadd_cameras(flux, wave, ivar, mask_cam=mask)
     
     # Multiply spectra if wanted
     if multiplication_factor is not None:
         flux = flux*multiplication_factor
-        ivar = ivar*multiplication_factor**-2
+        ivar = ivar*multiplication_factor**(-2.)
     
     # MW dust correct
     flux_mwcorr = mw_dust_correct(flux, wave, fibermap["TARGET_RA"], fibermap["TARGET_DEC"], "flux")
