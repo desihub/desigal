@@ -94,8 +94,11 @@ def get_spectra(targetids, release, n_workers=-1, use_db=True, zcat_table=None, 
                 sel_data["HEALPIX"],
                 sel_data["TARGETID"],
             )
-        )    
-    return stack(np.array(sel_spectra)[inverse_sorted])
+        )
+    sorted_spectra=[]
+    for i in range(len(inverse_sorted)):
+        sorted_spectra.append(sel_spectra[inverse_sorted[i]])
+    return stack(sorted_spectra) #stack(np.array(sel_spectra)[inverse_sorted])
 
 
 def _sel_objects_fits(release, release_path, targetids, **kwargs):
@@ -206,7 +209,7 @@ def _read_spectra(survey, program, healpix, targetid, release_path):
             "RESOLUTION": False,
         }
     )
-    #spectra = desispec.io.read_spectra(data_path, targetid)
+    #spectra = desispec.io.read_spectra(data_path)
     #mask = np.isin(spectra.fibermap["TARGETID"], targetid)
     #spectra = spectra[mask]
     return spectra
