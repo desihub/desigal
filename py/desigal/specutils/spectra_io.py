@@ -126,7 +126,7 @@ def _sel_objects_fits(release, release_path, targetids, **kwargs):
     sel_data = sel_data[sel_data["ZCAT_PRIMARY"]]
     sel_data = sel_data[["SURVEY", "PROGRAM", "HEALPIX", "TARGETID"]].to_pandas()
     for col, dtype in sel_data.dtypes.items():
-        if dtype == np.object:  # Only process object columns.
+        if dtype == object:  # Only process object columns.
             # decode, or return original value if decode return Nan
             sel_data[col] = sel_data[col].str.decode("utf-8")
 
@@ -150,7 +150,7 @@ def _sel_objects_table(table, targetids, **kwargs):
     sel_data = sel_data[sel_data["ZCAT_PRIMARY"]]
     sel_data = sel_data[["SURVEY", "PROGRAM", "HEALPIX", "TARGETID"]].to_pandas()
     for col, dtype in sel_data.dtypes.items():
-        if dtype == np.object:  # Only process object columns.
+        if dtype == object:  # Only process object columns.
             # decode, or return original value if decode return Nan
             sel_data[col] = sel_data[col].str.decode("utf-8")
 
@@ -257,7 +257,7 @@ def read_single_spectrum(
     t0 = time.time()
     hdus = fitsio.FITS(infile, mode='r')
 
-    targetrow = np.argwhere(hdus["FIBERMAP"].read(columns="TARGETID")==targetid)
+    targetrow = np.argwhere(hdus["FIBERMAP"].read(columns="TARGETID")==targetid)[0][0]
     nhdu = len(hdus)
 
     # load the metadata.
