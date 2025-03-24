@@ -12,7 +12,6 @@ import multiprocessing
 from joblib import Parallel, delayed
 import numpy as np
 import desispec
-from desispec.quicklook.palib import resample_spec
 from desispec.interpolation import resample_flux
 
 
