@@ -30,7 +30,7 @@ For example, to install the "0.1.0" tag (or release) do
 
 .. code-block:: bash
 
-  pip install git+https://github.com/desihub/desigal.git@0.1.0
+  pip install git+https://github.com/desihub/desigal.git
   
 Alternatively, you can clone the master branch from `Github`_ 
   
