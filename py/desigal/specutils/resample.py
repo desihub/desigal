@@ -58,12 +58,55 @@ def linear_resample(wave_new, wave, flux, ivar=None, fill_val=np.nan, n_workers=
             return np.array(flux_new), np.array(ivar_new)
         return flux_new
 
+def _sn_conserving_resample(wave,flux,outwave,ivar=None):
+    
+    #- convert flux to per bin before projecting to new bins
+    flux=flux*np.gradient(wave)
+
+    Pr=project(wave,outwave)
+    n=len(wave)
+    newflux=Pr.dot(flux)
+    #- convert back to df/dx (per angstrom) sampled at outwave
+    newflux/=np.gradient(outwave) #- per angstrom
+    if ivar is None:
+        return newflux
+    else:
+        ivar = ivar/(np.gradient(wave))**2.0
+        newvar=Pr.dot(ivar**(-1.0)) #- maintaining Total S/N
+        # RK:  this is just a kludge until we more robustly ensure newvar is correct
+        k = np.where(newvar <= 0.0)[0]
+        newvar[k] = 0.0000001  # flag bins with no contribution from input grid
+        newivar=1/newvar
+        # newivar[k] = 0.0
+
+        #- convert to per angstrom
+        newivar*=(np.gradient(outwave))**2.0
+        return newflux, newivar
 
 def sn_conserving_resample(
     wave_new, wave, flux, ivar=None, fill_val=np.nan, verbose=False, n_workers=1
 ):
     """
     Resample a spectrum to a new wavelength grid using S/N conserving resampling.
+    
+    
+    Algorithm is based on http://www.ast.cam.ac.uk/%7Erfc/vpfit10.2.pdf
+    Appendix: B.1
+
+    Args:
+    wave : original wavelength array (expected (but not limited) to be native CCD pixel wavelength grid
+    wave_new: new wavelength array: expected (but not limited) to be uniform binning
+    flux : df/dx (Flux per A) sampled at x
+    ivar : ivar in original binning. If not None, ivar in new binning is returned.
+
+    Note:
+    Full resolution computation for resampling is expensive for quick look.
+
+    desispec.interpolation.resample_flux using weights by ivar does not conserve total S/N.
+    Tests with arc lines show much narrow spectral profile, thus not giving realistic psf resolutions
+    This algorithm gives the same resolution as obtained for native CCD binning, i.e, resampling has
+    insignificant effect. Details,plots in the arc processing note.
+    
     """
     if n_workers == 1:
         flux_new, ivar_new = zip(
