@@ -11,7 +11,7 @@ from setuptools import setup, find_packages
 #
 # DESI support code.
 #
-from desiutil.setup import DesiTest, DesiVersion, get_version
+from desiutil.setup import DesiVersion, get_version
 #
 # Begin setup
 #
@@ -52,8 +52,15 @@ setup_keywords['zip_safe'] = False
 setup_keywords['use_2to3'] = False
 setup_keywords['packages'] = find_packages('py')
 setup_keywords['package_dir'] = {'':'py'}
-setup_keywords['cmdclass'] = {'version': DesiVersion,'test': DesiTest}
+setup_keywords['cmdclass'] = {'version': DesiVersion}
 setup_keywords['test_suite']='{name}.test.{name}_test_suite.{name}_test_suite'.format(**setup_keywords)
+
+#
+# Print informative message if user tried "python setup.py test"
+#
+if "test" in sys.argv:
+    print("Please run pytest instead")
+    sys.exit(1)
 #
 # Autogenerate command-line scripts.
 #
@@ -61,4 +68,5 @@ setup_keywords['test_suite']='{name}.test.{name}_test_suite.{name}_test_suite'.f
 #
 # Run setup command.
 #
-setup(**setup_keywords)
+if __name__ == 'main':
+    setup(**setup_keywords)
