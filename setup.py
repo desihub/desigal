@@ -68,5 +68,4 @@ if "test" in sys.argv:
 #
 # Run setup command.
 #
-if __name__ == 'main':
-    setup(**setup_keywords)
+setup(**setup_keywords)
