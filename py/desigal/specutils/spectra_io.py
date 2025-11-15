@@ -104,8 +104,30 @@ def get_spectra(targetids, release, n_workers=-1, use_db=True, zcat_table=None, 
 def _sel_objects_fits(release, release_path, targetids, **kwargs):
     """Select objects from the fits file. Helper function of get_spectra."""
     # Replace this step by database call once that is available
+    zcat_path = release_path / "zcatalog" / f"zall-pix-{release}.fits"
+    
+    # If the path doesn't exist, try looking in version subdirectories
+    if not zcat_path.exists():
+        zcatalog_dir = release_path / "zcatalog"
+        if zcatalog_dir.exists():
+            # Find all version subdirectories (v*, v*.*)
+            version_dirs = [d for d in zcatalog_dir.iterdir() if d.is_dir() and d.name.startswith('v')]
+            if version_dirs:
+                # Sort by version number to get the latest
+                # e.g., v0, v1, v1.1, v2 -> v2 is latest
+                def version_key(path):
+                    # Extract version number from directory name (e.g., 'v1.1' -> [1, 1])
+                    version_str = path.name[1:]  # Remove 'v' prefix
+                    try:
+                        return [int(x) for x in version_str.split('.')]
+                    except ValueError:
+                        return [0]
+                
+                latest_version_dir = sorted(version_dirs, key=version_key)[-1]
+                zcat_path = latest_version_dir / f"zall-pix-{release}.fits"
+    
     all_data = Table.read(
-        release_path / "zcatalog" / f"zall-pix-{release}.fits",
+        zcat_path,
         format="fits",
     )
 
