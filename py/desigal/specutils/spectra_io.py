@@ -20,7 +20,8 @@ from desispec.io.util import native_endian, checkgzip
 from desispec.io import iotime
 from desispec.zcatalog import find_primary_spectra
 from desispec.spectra import Spectra, stack
-import desispec.database.redshift as db
+from sqlalchemy import create_engine, MetaData, Table, Column, Integer, String, Boolean, select
+from sqlalchemy.orm import sessionmaker
 
 
 def get_spectra(targetids, release, n_workers=-1, use_db=True, zcat_table=None, **kwargs):
@@ -188,22 +189,55 @@ def _sel_objects_db(release, targetids, **kwargs):
             See https://desi.lbl.gov/trac/wiki/DESIProductionDatabase#Setuppgpass for one time setup instructions.
             Else use use_db=False to use the slower fits table based search."""
         )
-    db.log = get_logger(DEBUG)
-    postgresql = db.setup_db(schema=release, hostname='specprod-db.desi.lbl.gov', username='desi')
     
-    q = (
-        db.dbSession.query(
-            db.Zpix.survey,
-            db.Zpix.program,
-            db.Zpix.healpix,
-            db.Zpix.targetid,
+    log = get_logger(DEBUG)
+    
+    # Create database connection using SQLAlchemy directly
+    # Read credentials from ~/.pgpass file
+    hostname = 'specprod-db.desi.lbl.gov'
+    username = 'desi'
+    database = 'desi'
+    
+    # Connect to the database without creating any tables
+    connection_string = f"postgresql://{username}@{hostname}/{database}"
+    engine = create_engine(connection_string, echo=False)
+    
+    # Create a session
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    
+    try:
+        # Define the zpix table structure for querying (without creating it)
+        metadata = MetaData(schema=release)
+        zpix_table = Table('zpix', metadata,
+                          Column('survey', String),
+                          Column('program', String),
+                          Column('healpix', Integer),
+                          Column('targetid', Integer),
+                          Column('zcat_primary', Boolean),
+                          autoload_with=engine)
+        
+        # Query the database
+        stmt = select(
+            zpix_table.c.survey,
+            zpix_table.c.program,
+            zpix_table.c.healpix,
+            zpix_table.c.targetid
+        ).where(
+            zpix_table.c.targetid.in_(targetids)
+        ).where(
+            zpix_table.c.zcat_primary == True
         )
-        .filter(db.Zpix.targetid.in_(targetids))
-        .filter(db.Zpix.zcat_primary == True)
-        .all()
-    )
-    sel_data = pd.DataFrame(q, columns=["SURVEY", "PROGRAM", "HEALPIX", "TARGETID"])
-
+        
+        result = session.execute(stmt)
+        rows = result.fetchall()
+        
+        sel_data = pd.DataFrame(rows, columns=["SURVEY", "PROGRAM", "HEALPIX", "TARGETID"])
+        
+    finally:
+        session.close()
+        engine.dispose()
+    
     return sel_data
 
 

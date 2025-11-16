@@ -1,1 +1,3 @@
 git+https://github.com/desihub/desiutil@1.9.3#egg=desiutil
+sqlalchemy>=1.4.0
+psycopg2-binary>=2.9.0
