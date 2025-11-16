@@ -20,7 +20,7 @@ from desispec.io.util import native_endian, checkgzip
 from desispec.io import iotime
 from desispec.zcatalog import find_primary_spectra
 from desispec.spectra import Spectra, stack
-from sqlalchemy import create_engine, MetaData, Table, Column, Integer, String, Boolean, select
+from sqlalchemy import create_engine, MetaData, Table, select
 from sqlalchemy.orm import sessionmaker
 
 
@@ -208,14 +208,9 @@ def _sel_objects_db(release, targetids, **kwargs):
     
     try:
         # Define the zpix table structure for querying (without creating it)
+        # Use autoload to reflect the table structure from the database
         metadata = MetaData(schema=release)
-        zpix_table = Table('zpix', metadata,
-                          Column('survey', String),
-                          Column('program', String),
-                          Column('healpix', Integer),
-                          Column('targetid', Integer),
-                          Column('zcat_primary', Boolean),
-                          autoload_with=engine)
+        zpix_table = Table('zpix', metadata, autoload_with=engine)
         
         # Query the database
         stmt = select(
