@@ -4,8 +4,8 @@ from pathlib import Path
 from joblib import Parallel, delayed
 import numpy as np
 
+#from . import *
 
-from . import *
 
 
 def stack_spectra(
@@ -32,6 +32,12 @@ def stack_spectra(
     multiplication_factor = None,
     cosmo=None,
 ):
+    from desigal.specutils.normalize import normalize
+    from desigal.specutils.coaddition import coadd_flux
+    from desigal.specutils.resample import resample
+    from desigal.specutils.redshift import deredshift
+    from desigal.specutils.mw_dust import mw_dust_correct
+    
     if spectra is None:
         if (flux is None) or (wave is None):
             raise ValueError(
@@ -44,7 +50,11 @@ def stack_spectra(
     if n_workers <= 0:
         n_workers = multiprocessing.cpu_count()
     else:
-        n_workers = min(int(n_workers), multiprocessing.cpu_count())
+        n_workers = min(int(n_workers), multiprocessing.cpu_count() // 2)
+
+    ## hack!
+    #from desispec.coaddition import coadd_cameras
+    #spectra = coadd_cameras(spectra)
 
     # unpack the desispec.spectra.Spectra object
     if spectra is not None:
@@ -53,16 +63,17 @@ def stack_spectra(
         ivar = spectra.ivar
         mask = spectra.mask
         fibermap = spectra.fibermap
-        exp_fibermap = spectra.exp_fibermap
+        #exp_fibermap = spectra.exp_fibermap
 
     # Coadd cameras if needed
     if isinstance(flux, dict):
-        flux, wave, ivar = coadd_cameras(flux, wave, ivar, mask)
+        from desigal.specutils.coadd_cameras import coadd_cameras
+        flux, wave, ivar, mask = coadd_cameras(flux, wave, ivar, mask_cam=mask)
     
     # Multiply spectra if wanted
     if multiplication_factor is not None:
         flux = flux*multiplication_factor
-        ivar = ivar*multiplication_factor**-2
+        ivar = ivar*multiplication_factor**(-2.)
     
     # MW dust correct
     flux_mwcorr = mw_dust_correct(flux, wave, fibermap["TARGET_RA"], fibermap["TARGET_DEC"], "flux")
@@ -150,9 +161,8 @@ def write_binned_stacks(
     stack_redshift=None,
     table_column_dict={},
     table_format_dict={},
-):
-    """
-    Save spectra to a fits file compatible with FastSpecFit stackfit
+    stackinfo=None):
+    """Save spectra to a fits file compatible with FastSpecFit stackfit
 
     Parameters
     ----------
@@ -174,10 +184,15 @@ def write_binned_stacks(
         Dictionary with column names(keys) and data to be included in the fits file.
     table_format_dict : dict
         Dictionary with column names(keys) and formats of the columns to be included in the fits file.
+    stackinfo : astropy.table.Table
+        Astropy Table of "info" to write out in tandem with the spectra. If
+        present, `table_column_dict` and `table_format_dict` are ignored.
+    
     Returns
     -------
     Nothing
         Saves spectra to fits file.
+
     """
     from astropy.io import fits
 
@@ -215,28 +230,32 @@ def write_binned_stacks(
         hdures.header["EXTNAME"] = "RES"
         hdulist.append(hdures)
 
-    c1 = fits.Column(name="STACKID", array=stackids, format="K")
-    c2 = fits.Column(name="Z", array=stack_redshift, format="D")
-    columns = [c1, c2]
-    for key in table_column_dict.keys():
-        if table_format_dict[key][0] == "P":
-            columns.append(
-                fits.Column(
-                    name=key,
-                    array=np.array(table_column_dict[key], dtype="object"),
-                    format=table_format_dict[key],
+    if stackinfo is not None:
+        hdutable = fits.convenience.table_to_hdu(stackinfo)
+    else:
+        c1 = fits.Column(name="STACKID", array=stackids, format="K")
+        c2 = fits.Column(name="Z", array=stack_redshift, format="D")
+        columns = [c1, c2]
+        for key in table_column_dict.keys():
+            if table_format_dict[key][0] == "P":
+                columns.append(
+                    fits.Column(
+                        name=key,
+                        array=np.array(table_column_dict[key], dtype="object"),
+                        format=table_format_dict[key],
+                    )
                 )
-            )
-        else:
-            columns.append(
-                fits.Column(
-                    name=key,
-                    array=table_column_dict[key],
-                    format=table_format_dict[key],
+            else:
+                columns.append(
+                    fits.Column(
+                        name=key,
+                        array=table_column_dict[key],
+                        format=table_format_dict[key],
+                    )
                 )
-            )
-
-    hdutable = fits.BinTableHDU.from_columns(columns)
+    
+        hdutable = fits.BinTableHDU.from_columns(columns)
+        
     hdutable.header["EXTNAME"] = "STACKINFO"
     hdulist.append(hdutable)
 
