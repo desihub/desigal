@@ -23,7 +23,8 @@ from desispec.spectra import Spectra, stack
 import desispec.database.redshift as db
 
 
-def get_spectra(targetids, release, n_workers=-1, use_db=True, zcat_table=None, **kwargs):
+def get_spectra(targetids, release, n_workers=-1, use_db=True, zcat_table=None,
+                survey=None, program=None, **kwargs):
     """
     Get spectra for a list of targetids.
     Uses desispec.zcatalog.find_primary_spectra to find the primary spectra for each targetid.
@@ -47,13 +48,17 @@ def get_spectra(targetids, release, n_workers=-1, use_db=True, zcat_table=None, 
     -------
     desispec.spectra.Spectra
         Spectra for the targetids.
+
     """
+    from desispec.io.meta import get_desi_root_readonly
+    desi_root = get_desi_root_readonly()
+    
     if n_workers <= 0:
         n_workers = multiprocessing.cpu_count()
     else:
         n_workers = min(int(n_workers), multiprocessing.cpu_count())
     targetids = list(targetids)
-    spectro_redux_path = Path(os.environ["DESI_SPECTRO_REDUX"])
+    spectro_redux_path = Path(os.path.join(desi_root, 'spectro', 'redux'))
     release_path = spectro_redux_path / release
 
     if use_db:
@@ -61,7 +66,7 @@ def get_spectra(targetids, release, n_workers=-1, use_db=True, zcat_table=None, 
     elif (zcat_table is not None):
         sel_data = _sel_objects_table(zcat_table, targetids)
     else:
-        sel_data = _sel_objects_fits(release, release_path, targetids)
+        sel_data = _sel_objects_fits(release, release_path, targetids, survey=survey, program=program)
 
     sel_data = sel_data.set_index("TARGETID", drop=False)
     sel_data = sel_data.loc[targetids]
@@ -98,13 +103,17 @@ def get_spectra(targetids, release, n_workers=-1, use_db=True, zcat_table=None, 
     return stack(np.array(sel_spectra)[inverse_sorted])
 
 
-def _sel_objects_fits(release, release_path, targetids, **kwargs):
+def _sel_objects_fits(release, release_path, targetids, survey=None,
+                      program=None, **kwargs):
     """Select objects from the fits file. Helper function of get_spectra."""
     # Replace this step by database call once that is available
-    all_data = Table.read(
-        release_path / "zcatalog" / f"zall-pix-{release}.fits",
-        format="fits",
-    )
+    import fitsio
+    if survey is not None and program is not None:
+        all_data = Table(fitsio.read(str(release_path / "zcatalog" / f"zpix-{survey}-{program}.fits"), 'ZCATALOG'))
+        all_data['SURVEY'] = survey
+        all_data['PROGRAM'] = program
+    else:
+        all_data = Table(fitsio.read(release_path / "zcatalog" / f"zall-pix-{release}.fits", format="fits"))
 
     select_mask = np.isin(all_data["TARGETID"].value, targetids)
     sel_data = all_data[select_mask]
@@ -122,10 +131,10 @@ def _sel_objects_fits(release, release_path, targetids, **kwargs):
 
     sel_data = sel_data[sel_data["ZCAT_PRIMARY"]]
     sel_data = sel_data[["SURVEY", "PROGRAM", "HEALPIX", "TARGETID"]].to_pandas()
-    for col, dtype in sel_data.dtypes.items():
-        if dtype == np.object:  # Only process object columns.
-            # decode, or return original value if decode return Nan
-            sel_data[col] = sel_data[col].str.decode("utf-8")
+    #for col, dtype in sel_data.dtypes.items():
+    #    if dtype == np.object:  # Only process object columns.
+    #        # decode, or return original value if decode return Nan
+    #        sel_data[col] = sel_data[col].str.decode("utf-8")
 
     return sel_data
 
@@ -193,7 +202,7 @@ def _read_spectra(survey, program, healpix, targetid, release_path):
         / str(healpix)
         / f"coadd-{survey}-{program}-{healpix}.fits"
     )
-    print(data_path)
+    #print(data_path)
     spectra = read_single_spectrum(
         data_path, 
         targetid, 

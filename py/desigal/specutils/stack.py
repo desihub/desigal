@@ -4,8 +4,8 @@ from pathlib import Path
 from joblib import Parallel, delayed
 import numpy as np
 
+#from . import *
 
-from . import *
 
 
 def stack_spectra(
@@ -32,6 +32,12 @@ def stack_spectra(
     multiplication_factor = None,
     cosmo=None,
 ):
+    from desigal.specutils.normalize import normalize
+    from desigal.specutils.coaddition import coadd_flux
+    from desigal.specutils.resample import resample
+    from desigal.specutils.redshift import deredshift
+    from desigal.specutils.mw_dust import mw_dust_correct
+    
     if spectra is None:
         if (flux is None) or (wave is None):
             raise ValueError(
@@ -61,6 +67,7 @@ def stack_spectra(
 
     # Coadd cameras if needed
     if isinstance(flux, dict):
+        from desigal.specutils.coadd_cameras import coadd_cameras
         flux, wave, ivar, mask = coadd_cameras(flux, wave, ivar, mask_cam=mask)
     
     # Multiply spectra if wanted
