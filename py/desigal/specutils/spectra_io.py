@@ -20,7 +20,7 @@ from desispec.io.util import native_endian, checkgzip
 from desispec.io import iotime
 from desispec.zcatalog import find_primary_spectra
 from desispec.spectra import Spectra, stack
-import desispec.database.redshift as db
+import specprodDB.load as db
 
 
 def get_spectra(targetids, release, n_workers=-1, use_db=True, zcat_table=None,
@@ -42,7 +42,7 @@ def get_spectra(targetids, release, n_workers=-1, use_db=True, zcat_table=None,
         Use the desi redshift database to get the list of spectra files, by default True.
         Needs an initial setup of the `~/.pgpass` file. See https://desi.lbl.gov/trac/wiki/DESIProductionDatabase#Setuppgpass
     zcat_table : astropy.Table.table, optional
-        Use pre-loaded zcat table to get the list of spectra files. This is only used when 
+        Use pre-loaded zcat table to get the list of spectra files. This is only used when
         use_dp=False and a zcat_table is specified.
     Returns
     -------
@@ -63,7 +63,7 @@ def get_spectra(targetids, release, n_workers=-1, use_db=True, zcat_table=None,
 
     if use_db:
         sel_data = _sel_objects_db(release, targetids)
-    elif (zcat_table is not None):
+    elif zcat_table is not None:
         sel_data = _sel_objects_table(zcat_table, targetids)
     else:
         sel_data = _sel_objects_fits(release, release_path, targetids, survey=survey, program=program)
@@ -71,7 +71,7 @@ def get_spectra(targetids, release, n_workers=-1, use_db=True, zcat_table=None,
     sel_data = sel_data.set_index("TARGETID", drop=False)
     sel_data = sel_data.loc[targetids]
     sel_data = Table.from_pandas(sel_data)
-    file_sorted = sel_data.argsort(keys=["SURVEY","PROGRAM","HEALPIX","TARGETID"])
+    file_sorted = sel_data.argsort(keys=["SURVEY", "PROGRAM", "HEALPIX", "TARGETID"])
     inverse_sorted = np.argsort(file_sorted)
     sel_data = sel_data[file_sorted]
     found_targets_bool = np.isin(targetids, sel_data["TARGETID"])
@@ -89,7 +89,7 @@ def get_spectra(targetids, release, n_workers=-1, use_db=True, zcat_table=None,
                 sel_data["HEALPIX"],
                 sel_data["TARGETID"],
             )
-        ]    
+        ]
     else:
         sel_spectra = Parallel(n_jobs=n_workers)(
             delayed(_read_spectra)(survey, program, healpix, targetid, release_path)
@@ -99,8 +99,11 @@ def get_spectra(targetids, release, n_workers=-1, use_db=True, zcat_table=None,
                 sel_data["HEALPIX"],
                 sel_data["TARGETID"],
             )
-        )    
-    return stack(np.array(sel_spectra)[inverse_sorted])
+        )
+    sorted_spectra = []
+    for i in range(len(inverse_sorted)):
+        sorted_spectra.append(sel_spectra[inverse_sorted[i]])
+    return stack(sorted_spectra)  # stack(np.array(sel_spectra)[inverse_sorted])
 
 
 def _sel_objects_fits(release, release_path, targetids, survey=None,
@@ -115,6 +118,38 @@ def _sel_objects_fits(release, release_path, targetids, survey=None,
     else:
         all_data = Table(fitsio.read(release_path / "zcatalog" / f"zall-pix-{release}.fits", format="fits"))
 
+    zcat_path = release_path / "zcatalog" / f"zall-pix-{release}.fits"
+
+    # If the path doesn't exist, try looking in version subdirectories
+    if not zcat_path.exists():
+        zcatalog_dir = release_path / "zcatalog"
+        if zcatalog_dir.exists():
+            # Find all version subdirectories (v*, v*.*)
+            version_dirs = [
+                d
+                for d in zcatalog_dir.iterdir()
+                if d.is_dir() and d.name.startswith("v")
+            ]
+            if version_dirs:
+                # Sort by version number to get the latest
+                # e.g., v0, v1, v1.1, v2 -> v2 is latest
+                def version_key(path):
+                    # Extract version number from directory name (e.g., 'v1.1' -> [1, 1])
+                    version_str = path.name[1:]  # Remove 'v' prefix
+                    try:
+                        return [int(x) for x in version_str.split(".")]
+                    except ValueError:
+                        return [0]
+
+                latest_version_dir = sorted(version_dirs, key=version_key)[-1]
+                zcat_path = latest_version_dir / f"zall-pix-{release}.fits"
+
+    all_data = Table.read(
+        zcat_path,
+        format="fits",
+    )
+>>>>>>> main
+
     select_mask = np.isin(all_data["TARGETID"].value, targetids)
     sel_data = all_data[select_mask]
     del all_data
@@ -125,9 +160,9 @@ def _sel_objects_fits(release, release_path, targetids, survey=None,
 
         nspec, specprim = find_primary_spectra(sel_data, **kwargs)
         sel_data["ZCAT_NSPEC"] = nspec  # number of spectra for this object in catalog
-        sel_data[
-            "ZCAT_PRIMARY"
-        ] = specprim  # True/False if this is the primary spectrum in catalog
+        sel_data["ZCAT_PRIMARY"] = (
+            specprim  # True/False if this is the primary spectrum in catalog
+        )
 
     sel_data = sel_data[sel_data["ZCAT_PRIMARY"]]
     sel_data = sel_data[["SURVEY", "PROGRAM", "HEALPIX", "TARGETID"]].to_pandas()
@@ -137,6 +172,7 @@ def _sel_objects_fits(release, release_path, targetids, survey=None,
     #        sel_data[col] = sel_data[col].str.decode("utf-8")
 
     return sel_data
+
 
 def _sel_objects_table(table, targetids, **kwargs):
     """Select objects from the table. Helper function of get_spectra."""
@@ -149,14 +185,14 @@ def _sel_objects_table(table, targetids, **kwargs):
 
         nspec, specprim = find_primary_spectra(sel_data, **kwargs)
         sel_data["ZCAT_NSPEC"] = nspec  # number of spectra for this object in catalog
-        sel_data[
-            "ZCAT_PRIMARY"
-        ] = specprim  # True/False if this is the primary spectrum in catalog
+        sel_data["ZCAT_PRIMARY"] = (
+            specprim  # True/False if this is the primary spectrum in catalog
+        )
 
     sel_data = sel_data[sel_data["ZCAT_PRIMARY"]]
     sel_data = sel_data[["SURVEY", "PROGRAM", "HEALPIX", "TARGETID"]].to_pandas()
     for col, dtype in sel_data.dtypes.items():
-        if dtype == np.object:  # Only process object columns.
+        if dtype == object:  # Only process object columns.
             # decode, or return original value if decode return Nan
             sel_data[col] = sel_data[col].str.decode("utf-8")
 
@@ -170,11 +206,15 @@ def _sel_objects_db(release, targetids, **kwargs):
         raise SystemExit(
             """Database access requires a ~/.pgpass file.
             See https://desi.lbl.gov/trac/wiki/DESIProductionDatabase#Setuppgpass for one time setup instructions.
-            Else use use_db=False to use the slower fits table based search."""
+            Else use `use_db=False` to use the slower fits table based search.
+            You may also try running this from the command line and then rerun this cell.
+            `cat /global/common/software/desi/desi_public.pgpass >> ~/.pgpass; chmod 600 ~/.pgpass`"""
         )
     db.log = get_logger(DEBUG)
-    postgresql = db.setup_db(schema=release, hostname='specprod-db.desi.lbl.gov', username='desi')
-    
+    postgresql = db.setup_db(
+        schema=release, hostname="specprod-db.desi.lbl.gov", username="desi"
+    )
+
     q = (
         db.dbSession.query(
             db.Zpix.survey,
@@ -204,8 +244,8 @@ def _read_spectra(survey, program, healpix, targetid, release_path):
     )
     #print(data_path)
     spectra = read_single_spectrum(
-        data_path, 
-        targetid, 
+        data_path,
+        targetid,
         read_hdu={
             "FIBERMAP": True,
             "EXP_FIBERMAP": False,
@@ -213,11 +253,11 @@ def _read_spectra(survey, program, healpix, targetid, release_path):
             "EXTRA_CATALOG": False,
             "MASK": False,
             "RESOLUTION": False,
-        }
+        },
     )
-    #spectra = desispec.io.read_spectra(data_path, targetid)
-    #mask = np.isin(spectra.fibermap["TARGETID"], targetid)
-    #spectra = spectra[mask]
+    # spectra = desispec.io.read_spectra(data_path)
+    # mask = np.isin(spectra.fibermap["TARGETID"], targetid)
+    # spectra = spectra[mask]
     return spectra
 
 
@@ -232,8 +272,8 @@ def read_single_spectrum(
         "EXTRA_CATALOG": False,
         "MASK": False,
         "RESOLUTION": False,
-        },
-    ):    
+    },
+):
     """
     Read single spectrum as Spectra object from FITS file.
 
@@ -261,9 +301,9 @@ def read_single_spectrum(
         raise IOError("{} is not a file".format(infile))
 
     t0 = time.time()
-    hdus = fitsio.FITS(infile, mode='r')
+    hdus = fitsio.FITS(infile, mode="r")
 
-    targetrow = np.argwhere(hdus["FIBERMAP"].read(columns="TARGETID")==targetid)
+    targetrow = np.argwhere(hdus["FIBERMAP"].read(columns="TARGETID") == targetid)[0][0]
     nhdu = len(hdus)
 
     # load the metadata.
@@ -288,26 +328,36 @@ def read_single_spectrum(
     # extension name to determine where to put the data.  We don't
     # explicitly copy the data, since that will be done when constructing
     # the Spectra object.
-            
+
     for h in range(1, nhdu):
         name = hdus[h].read_header()["EXTNAME"]
         if name == "FIBERMAP":
             if read_hdu["FIBERMAP"]:
-                fmap = encode_table(Table(hdus[h].read(rows=targetrow), copy=True).as_array())
+                fmap = encode_table(
+                    Table(hdus[h].read(rows=targetrow), copy=True).as_array()
+                )
         elif name == "EXP_FIBERMAP":
             if read_hdu["EXP_FIBERMAP"]:
-                expfmap = encode_table(Table(hdus[h].read(rows=targetrow), copy=True).as_array())
+                expfmap = encode_table(
+                    Table(hdus[h].read(rows=targetrow), copy=True).as_array()
+                )
         elif name == "SCORES":
             if read_hdu["SCORES"]:
-                scores = encode_table(Table(hdus[h].read(rows=targetrow), copy=True).as_array())
+                scores = encode_table(
+                    Table(hdus[h].read(rows=targetrow), copy=True).as_array()
+                )
         elif name == "EXTRA_CATALOG":
             if read_hdu["EXTRA_CATALOG"]:
-                extra_catalog = encode_table(Table(hdus[h].read(rows=targetrow), copy=True).as_array())
+                extra_catalog = encode_table(
+                    Table(hdus[h].read(rows=targetrow), copy=True).as_array()
+                )
         else:
             # Find the band based on the name
             mat = re.match(r"(.*)_(.*)", name)
             if mat is None:
-                raise RuntimeError("FITS extension name {} does not contain the band".format(name))
+                raise RuntimeError(
+                    "FITS extension name {} does not contain the band".format(name)
+                )
             band = mat.group(1).lower()
             type = mat.group(2)
             if band not in bands:
@@ -315,67 +365,84 @@ def read_single_spectrum(
             if type == "WAVELENGTH":
                 if wave is None:
                     wave = {}
-                #- Note: keep original float64 resolution for wavelength
+                # - Note: keep original float64 resolution for wavelength
                 wave[band] = native_endian(hdus[h].read())
             elif type == "FLUX":
                 if flux is None:
                     flux = {}
-                flux[band] = native_endian(hdus[h][targetrow:targetrow+1, :].astype(ftype))
+                flux[band] = native_endian(
+                    hdus[h][targetrow : targetrow + 1, :].astype(ftype)
+                )
             elif type == "IVAR":
                 if ivar is None:
                     ivar = {}
-                ivar[band] = native_endian(hdus[h][targetrow:targetrow+1, :].astype(ftype))
+                ivar[band] = native_endian(
+                    hdus[h][targetrow : targetrow + 1, :].astype(ftype)
+                )
             elif type == "MASK" and read_hdu["MASK"]:
                 if mask is None:
                     mask = {}
-                mask[band] = native_endian(hdus[h][targetrow:targetrow+1, :].astype(np.uint32))
+                mask[band] = native_endian(
+                    hdus[h][targetrow : targetrow + 1, :].astype(np.uint32)
+                )
             elif type == "RESOLUTION" and read_hdu["RESOLUTION"]:
                 if res is None:
                     res = {}
-                res[band] = native_endian(hdus[h][targetrow:targetrow+1, :, :].astype(ftype))
+                res[band] = native_endian(
+                    hdus[h][targetrow : targetrow + 1, :, :].astype(ftype)
+                )
             else:
                 pass
     hdus.close()
     duration = time.time() - t0
-    log.info(iotime.format('read', infile, duration))
+    log.info(iotime.format("read", infile, duration))
 
     # Construct the Spectra object from the data.  If there are any
     # inconsistencies in the sizes of the arrays read from the file,
     # they will be caught by the constructor.
-    spec = Spectra(bands, wave, flux, ivar, mask=mask, resolution_data=res,
-        fibermap=fmap, exp_fibermap=expfmap,
-        meta=meta, extra=extra, extra_catalog=extra_catalog,
-        single=single, scores=scores)
+    spec = Spectra(
+        bands,
+        wave,
+        flux,
+        ivar,
+        mask=mask,
+        resolution_data=res,
+        fibermap=fmap,
+        exp_fibermap=expfmap,
+        meta=meta,
+        extra=extra,
+        extra_catalog=extra_catalog,
+        single=single,
+        scores=scores,
+    )
     return spec
 
+    # def _read_spectra(survey, program, healpix, targetid, release_path):
+    #     """Read a single spectra file. Helper function of get_spectra."""
+    #     data_path = (
+    #         release_path
+    #         / "healpix"
+    #         / survey
+    #         / program
+    #         / str(int(healpix / 100))
+    #         / str(healpix)
+    #         / f"coadd-{survey}-{program}-{healpix}.fits"
+    #     )
 
-# def _read_spectra(survey, program, healpix, targetid, release_path):
-#     """Read a single spectra file. Helper function of get_spectra."""
-#     data_path = (
-#         release_path
-#         / "healpix"
-#         / survey
-#         / program
-#         / str(int(healpix / 100))
-#         / str(healpix)
-#         / f"coadd-{survey}-{program}-{healpix}.fits"
-#     )
+    #     hdus = fits.open(data_path, memap=True)
+    #     mask = np.isin(hdus[1].data["TARGETID"], targetid)
+    #     mask = np.where(mask)[0]
 
-#     hdus = fits.open(data_path, memap=True)
-#     mask = np.isin(hdus[1].data["TARGETID"], targetid)
-#     mask = np.where(mask)[0]
+    #     exp_mask = np.isin(hdus[2].data["TARGETID"], targetid)
+    #     exp_mask = np.where(exp_mask)[0]
 
-#     exp_mask = np.isin(hdus[2].data["TARGETID"], targetid)
-#     exp_mask = np.where(exp_mask)[0]
-
-#     spectra = desispec.spectra.Spectra()
-#     # Doing this to avoid all the checks in the Spectra constructor
-#     spectra.wave={"b": hdus[3].data.copy(), "r": hdus[8].data.copy(), "z": hdus[13].data.copy()}
-#     spectra.flux={"b": hdus[4].data[mask].copy(),"r": hdus[9].data[mask].copy(),"z": hdus[14].data[mask].copy(),}
-#     spectra.ivar={"b": hdus[5].data[mask].copy(),"r": hdus[10].data[mask].copy(),"z": hdus[15].data[mask].copy(),}
-#     spectra.fibermap=hdus[1].data[mask].copy()
-#     spectra.exp_fibermap=hdus[2].data[exp_mask].copy()
+    #     spectra = desispec.spectra.Spectra()
+    #     # Doing this to avoid all the checks in the Spectra constructor
+    #     spectra.wave={"b": hdus[3].data.copy(), "r": hdus[8].data.copy(), "z": hdus[13].data.copy()}
+    #     spectra.flux={"b": hdus[4].data[mask].copy(),"r": hdus[9].data[mask].copy(),"z": hdus[14].data[mask].copy(),}
+    #     spectra.ivar={"b": hdus[5].data[mask].copy(),"r": hdus[10].data[mask].copy(),"z": hdus[15].data[mask].copy(),}
+    #     spectra.fibermap=hdus[1].data[mask].copy()
+    #     spectra.exp_fibermap=hdus[2].data[exp_mask].copy()
     ###TODO: ADD MASK and R
-    
 
     return spectra
