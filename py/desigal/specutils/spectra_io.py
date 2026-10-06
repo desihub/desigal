@@ -23,6 +23,178 @@ from desispec.spectra import Spectra, stack
 import specprodDB.load as db
 
 
+#: Directory under a release that holds the healpix-grouped coadds. This was
+#: ``healpix`` up to and including loa, and became ``spectra`` in matterhorn.
+COADD_DIRNAMES = ("healpix", "spectra")
+
+#: Name of the healpix column in a zcatalog. Renamed from HEALPIX to UNIQPIX
+#: in matterhorn; the values index the directory tree identically.
+HEALPIX_COLUMNS = ("HEALPIX", "UNIQPIX")
+
+#: The only zcatalog columns get_spectra needs. These files run to tens of GB
+#: across 130+ columns, so reading all of them is both slow and liable to
+#: exhaust memory: loa's zall-pix is 47 GB, of which these five are 3.9 GB.
+ZCAT_COLUMNS = ("TARGETID", "SURVEY", "PROGRAM", "ZCAT_PRIMARY")
+
+
+def _spectro_redux():
+    """Root of the spectroscopic reductions, from $DESI_SPECTRO_REDUX."""
+    try:
+        return Path(os.environ["DESI_SPECTRO_REDUX"])
+    except KeyError:
+        raise KeyError(
+            "$DESI_SPECTRO_REDUX is not set. Source the DESI environment "
+            "first, e.g. "
+            "`source /global/common/software/desi/desi_environment.sh`."
+        ) from None
+
+
+def _version_sort_key(name):
+    """Sort key for a ``vN``/``vN.M`` zcatalog directory name."""
+    return [int(part) for part in name[1:].split(".")]
+
+
+def _is_version_dir(path):
+    """True for a directory named like a zcatalog version, e.g. v1 or v1.1."""
+    if not path.is_dir() or not path.name.startswith("v"):
+        return False
+    try:
+        _version_sort_key(path.name)
+    except ValueError:
+        return False
+    return True
+
+
+def list_releases(spectro_redux=None, require_spectra=True):
+    """List the DESI data releases available in this environment.
+
+    Releases are discovered from the filesystem rather than hardcoded, so a
+    future release is picked up with no code change. A directory counts as a
+    release if it contains a ``zall-pix-<name>.fits`` catalog and, unless
+    ``require_spectra`` is False, a tree of coadded spectra. $DESI_SPECTRO_REDUX
+    also holds well over a hundred personal and test reduction directories,
+    some of which have a ``zcatalog`` of their own; requiring the release-named
+    catalog is what separates them from the real thing.
+
+    Parameters
+    ----------
+    spectro_redux : str or pathlib.Path, optional
+        Root to search. Defaults to $DESI_SPECTRO_REDUX.
+    require_spectra : bool, optional
+        If True (the default) only return releases whose coadds are actually
+        on disk. Some releases, jura at the time of writing, keep a zcatalog
+        at NERSC but no spectra, so `get_spectra` cannot read from them.
+
+    Returns
+    -------
+    list of str
+        Release names, sorted alphabetically.
+    """
+    root = Path(spectro_redux) if spectro_redux is not None else _spectro_redux()
+    releases = []
+    for entry in sorted(root.iterdir()):
+        try:
+            if not entry.is_dir() or not (entry / "zcatalog").is_dir():
+                continue
+            if require_spectra and not any(
+                (entry / name).is_dir() for name in COADD_DIRNAMES
+            ):
+                continue
+            _zcatalog_path(entry.name, entry)
+        except (FileNotFoundError, PermissionError, OSError):
+            # Not a release, or a directory we cannot read into.
+            continue
+        releases.append(entry.name)
+    return releases
+
+
+def _coadd_dir(release_path):
+    """Directory holding the healpix-grouped coadds for a release."""
+    for name in COADD_DIRNAMES:
+        candidate = release_path / name
+        if candidate.is_dir():
+            return candidate
+    raise FileNotFoundError(
+        f"No coadded spectra found for release '{release_path.name}': none of "
+        f"{list(COADD_DIRNAMES)} exist under {release_path}. Some releases "
+        "(jura, at the time of writing) keep a zcatalog at NERSC but no "
+        "spectra, in which case targets can be looked up but not read. "
+        f"Releases that do have spectra: {list_releases()}"
+    )
+
+
+def _zcatalog_path(release, release_path):
+    """Locate the ``zall-pix`` catalog for a release.
+
+    The layout has moved three times: directly under ``zcatalog`` (fuji), in a
+    version subdirectory (guadalupe through loa), and in a ``zall``
+    subdirectory of that (matterhorn). Only those exact locations are checked,
+    which also avoids the stale copies under ``zcatalog/v*/deprecated``.
+    """
+    zcatalog_dir = release_path / "zcatalog"
+    if not zcatalog_dir.is_dir():
+        raise FileNotFoundError(
+            f"No zcatalog directory for release '{release}' at {zcatalog_dir}. "
+            f"Available releases: {list_releases()}"
+        )
+
+    filename = f"zall-pix-{release}.fits"
+    candidates = [zcatalog_dir / filename]
+    for version_dir in sorted(
+        (d for d in zcatalog_dir.iterdir() if _is_version_dir(d)),
+        key=lambda d: _version_sort_key(d.name),
+        reverse=True,
+    ):
+        candidates.append(version_dir / filename)
+        candidates.append(version_dir / "zall" / filename)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError(
+        f"No {filename} found for release '{release}'. Looked in: "
+        + ", ".join(str(c) for c in candidates)
+    )
+
+
+def _healpix_column(colnames):
+    """Name of the healpix column present in a zcatalog."""
+    for name in HEALPIX_COLUMNS:
+        if name in colnames:
+            return name
+    raise KeyError(
+        "zcatalog has none of the expected healpix columns "
+        f"{list(HEALPIX_COLUMNS)}; found {list(colnames)[:20]}..."
+    )
+
+
+def _decode_bytes(table):
+    """Decode any bytes columns of a pandas frame to str, in place."""
+    for column in table.columns:
+        values = table[column]
+        if values.dtype == object and len(values) and isinstance(
+            values.iloc[0], bytes
+        ):
+            table[column] = values.str.decode("utf-8")
+    return table
+
+
+def _release_has_db(release):
+    """Whether the redshift database can actually serve this release.
+
+    A schema may be absent (jura, kibo) or present but unpopulated
+    (matterhorn, whose ``zpix`` table exists and is empty), so this checks for
+    a row rather than just for the table.
+    """
+    try:
+        db.setup_db(
+            schema=release, hostname="specprod-db.desi.lbl.gov", username="desi"
+        )
+        return db.dbSession.query(db.Zpix.targetid).limit(1).count() > 0
+    except Exception:
+        return False
+
+
 def get_spectra(
     targetids, release, n_workers=-1, use_db=True, zcat_table=None, **kwargs
 ):
@@ -36,27 +208,74 @@ def get_spectra(
     targetids : list
         List of targetids to get spectra for.
     release : str
-        Data release to get spectra for.
+        Data release to get spectra for, e.g. "iron" or "loa". Call
+        `list_releases` for the ones available in this environment.
     n_workers : int, optional
         Number of parallel threads to read the files, by default -1, i.e. all available threads.
     use_db : bool, optional
         Use the desi redshift database to get the list of spectra files, by default True.
         Needs an initial setup of the `~/.pgpass` file. See https://desi.lbl.gov/trac/wiki/DESIProductionDatabase#Setuppgpass
+        Releases the database cannot serve fall back to the zcatalog FITS
+        file with a warning; see Notes.
     zcat_table : astropy.Table.table, optional
         Use pre-loaded zcat table to get the list of spectra files. This is only used when
         use_dp=False and a zcat_table is specified.
+
     Returns
     -------
     desispec.spectra.Spectra
         Spectra for the targetids.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the release does not exist, or has no coadded spectra on disk. The
+        latter is the case for jura, which keeps a zcatalog at NERSC but no
+        spectra.
+
+    Notes
+    -----
+    Release layouts have changed over time and are handled transparently:
+
+    * coadds live under ``healpix/`` up to loa and ``spectra/`` from
+      matterhorn on;
+    * the ``zall-pix`` catalog sits directly in ``zcatalog/`` (fuji), in a
+      version subdirectory (guadalupe through loa), or in a ``zall``
+      subdirectory of that (matterhorn), with the highest version winning;
+    * the healpix column is named ``HEALPIX`` up to loa and ``UNIQPIX`` in
+      matterhorn.
+
+    Not every release is in the redshift database. At the time of writing
+    jura and kibo have no ``zpix`` table and matterhorn's is empty, so those
+    fall back to reading the zcatalog. The fallback is much slower -- for loa,
+    about 1.5 s via the database against about 78 s via FITS -- so prefer the
+    database where it is available.
     """
     if n_workers <= 0:
         n_workers = multiprocessing.cpu_count()
     else:
         n_workers = min(int(n_workers), multiprocessing.cpu_count())
     targetids = list(targetids)
-    spectro_redux_path = Path(os.environ["DESI_SPECTRO_REDUX"])
+    spectro_redux_path = _spectro_redux()
     release_path = spectro_redux_path / release
+    if not release_path.is_dir():
+        raise FileNotFoundError(
+            f"No such release '{release}' under {spectro_redux_path}. "
+            f"Available releases: {list_releases()}"
+        )
+    # Raises with an actionable message for a catalog-only release such as
+    # jura, before any time is spent reading a multi-GB zcatalog.
+    coadd_dir = _coadd_dir(release_path)
+
+    if use_db and zcat_table is None and not _release_has_db(release):
+        log = get_logger()
+        log.warning(
+            "The redshift database has no usable data for release '%s', so "
+            "falling back to the zcatalog FITS file. This is slower; pass "
+            "use_db=False to select it explicitly and silence this warning.",
+            release,
+        )
+        use_db = False
 
     if use_db:
         sel_data = _sel_objects_db(release, targetids)
@@ -79,7 +298,7 @@ def get_spectra(
     # adding special case so as to have the option to parallelize externally
     if n_workers == 1:
         sel_spectra = [
-            _read_spectra(survey, program, healpix, targetid, release_path)
+            _read_spectra(survey, program, healpix, targetid, coadd_dir)
             for survey, program, healpix, targetid in zip(
                 sel_data["SURVEY"],
                 sel_data["PROGRAM"],
@@ -89,7 +308,7 @@ def get_spectra(
         ]
     else:
         sel_spectra = Parallel(n_jobs=n_workers)(
-            delayed(_read_spectra)(survey, program, healpix, targetid, release_path)
+            delayed(_read_spectra)(survey, program, healpix, targetid, coadd_dir)
             for survey, program, healpix, targetid in zip(
                 sel_data["SURVEY"],
                 sel_data["PROGRAM"],
@@ -104,42 +323,43 @@ def get_spectra(
 
 
 def _sel_objects_fits(release, release_path, targetids, **kwargs):
-    """Select objects from the fits file. Helper function of get_spectra."""
-    # Replace this step by database call once that is available
-    zcat_path = release_path / "zcatalog" / f"zall-pix-{release}.fits"
+    """Select objects from the fits file. Helper function of get_spectra.
 
-    # If the path doesn't exist, try looking in version subdirectories
-    if not zcat_path.exists():
-        zcatalog_dir = release_path / "zcatalog"
-        if zcatalog_dir.exists():
-            # Find all version subdirectories (v*, v*.*)
-            version_dirs = [
-                d
-                for d in zcatalog_dir.iterdir()
-                if d.is_dir() and d.name.startswith("v")
+    Reads in two passes -- TARGETID to find the rows of interest, then just
+    those rows of the handful of columns actually needed. A zall-pix catalog
+    runs to tens of GB over 130+ columns (47 GB for loa), so reading it whole
+    is impractical.
+    """
+    zcat_path = _zcatalog_path(release, release_path)
+
+    with fitsio.FITS(str(zcat_path)) as hdus:
+        extnames = [hdu.get_extname() for hdu in hdus]
+        zcat = hdus["ZCATALOG"] if "ZCATALOG" in extnames else hdus[1]
+        colnames = zcat.get_colnames()
+        healpix_column = _healpix_column(colnames)
+
+        # Pass 1: TARGETID alone, to locate the rows we want.
+        rows = np.flatnonzero(np.isin(zcat["TARGETID"].read(), targetids))
+        if rows.size == 0:
+            raise ValueError(
+                f"None of the {len(targetids)} requested target ids were "
+                f"found in {zcat_path}."
+            )
+
+        # Pass 2: only the needed columns, only the matching rows.
+        columns = [c for c in ZCAT_COLUMNS if c in colnames]
+        columns.append(healpix_column)
+        if "ZCAT_PRIMARY" not in colnames:
+            # find_primary_spectra needs these to work out the primary itself.
+            columns += [
+                c for c in ("ZWARN", kwargs.get("sort_column", "TSNR2_LRG"))
+                if c in colnames and c not in columns
             ]
-            if version_dirs:
-                # Sort by version number to get the latest
-                # e.g., v0, v1, v1.1, v2 -> v2 is latest
-                def version_key(path):
-                    # Extract version number from directory name (e.g., 'v1.1' -> [1, 1])
-                    version_str = path.name[1:]  # Remove 'v' prefix
-                    try:
-                        return [int(x) for x in version_str.split(".")]
-                    except ValueError:
-                        return [0]
+        sel_data = Table(zcat.read(columns=columns, rows=rows))
 
-                latest_version_dir = sorted(version_dirs, key=version_key)[-1]
-                zcat_path = latest_version_dir / f"zall-pix-{release}.fits"
-
-    all_data = Table.read(
-        zcat_path,
-        format="fits",
-    )
-
-    select_mask = np.isin(all_data["TARGETID"].value, targetids)
-    sel_data = all_data[select_mask]
-    del all_data
+    if healpix_column != "HEALPIX":
+        # matterhorn renamed HEALPIX to UNIQPIX; the values are the same.
+        sel_data.rename_column(healpix_column, "HEALPIX")
 
     if "ZCAT_PRIMARY" not in sel_data.colnames:
         sel_data["ZCAT_NSPEC"] = 0
@@ -153,12 +373,7 @@ def _sel_objects_fits(release, release_path, targetids, **kwargs):
 
     sel_data = sel_data[sel_data["ZCAT_PRIMARY"]]
     sel_data = sel_data[["SURVEY", "PROGRAM", "HEALPIX", "TARGETID"]].to_pandas()
-    for col, dtype in sel_data.dtypes.items():
-        if dtype == object:  # Only process object columns.
-            # decode, or return original value if decode return Nan
-            sel_data[col] = sel_data[col].str.decode("utf-8")
-
-    return sel_data
+    return _decode_bytes(sel_data)
 
 
 def _sel_objects_table(table, targetids, **kwargs):
@@ -166,6 +381,11 @@ def _sel_objects_table(table, targetids, **kwargs):
     select_mask = np.isin(table["TARGETID"].value, targetids)
     sel_data = table[select_mask]
 
+    healpix_column = _healpix_column(sel_data.colnames)
+    if healpix_column != "HEALPIX":
+        # matterhorn renamed HEALPIX to UNIQPIX; the values are the same.
+        sel_data.rename_column(healpix_column, "HEALPIX")
+
     if "ZCAT_PRIMARY" not in sel_data.colnames:
         sel_data["ZCAT_NSPEC"] = 0
         sel_data["ZCAT_PRIMARY"] = 0
@@ -178,12 +398,7 @@ def _sel_objects_table(table, targetids, **kwargs):
 
     sel_data = sel_data[sel_data["ZCAT_PRIMARY"]]
     sel_data = sel_data[["SURVEY", "PROGRAM", "HEALPIX", "TARGETID"]].to_pandas()
-    for col, dtype in sel_data.dtypes.items():
-        if dtype == object:  # Only process object columns.
-            # decode, or return original value if decode return Nan
-            sel_data[col] = sel_data[col].str.decode("utf-8")
-
-    return sel_data
+    return _decode_bytes(sel_data)
 
 
 def _sel_objects_db(release, targetids, **kwargs):
@@ -218,18 +433,21 @@ def _sel_objects_db(release, targetids, **kwargs):
     return sel_data
 
 
-def _read_spectra(survey, program, healpix, targetid, release_path):
-    """Read a single spectra file. Helper function of get_spectra."""
+def _read_spectra(survey, program, healpix, targetid, coadd_dir):
+    """Read a single spectra file. Helper function of get_spectra.
+
+    ``coadd_dir`` is the resolved coadd root for the release -- ``healpix`` up
+    to loa, ``spectra`` from matterhorn on -- as returned by `_coadd_dir`.
+    """
+    healpix = int(healpix)
     data_path = (
-        release_path
-        / "healpix"
+        coadd_dir
         / survey
         / program
-        / str(int(healpix / 100))
+        / str(healpix // 100)
         / str(healpix)
         / f"coadd-{survey}-{program}-{healpix}.fits"
     )
-    print(data_path)
     spectra = read_single_spectrum(
         data_path,
         targetid,
