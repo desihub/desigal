@@ -706,6 +706,42 @@ class TestReleaseLayout(unittest.TestCase):
         self.assertGreater(key("v10"), key("v9"))
         self.assertGreater(key("v2"), key("v1.9"))
 
+    def test_missing_targets_raise_valueerror_naming_them(self):
+        """Targets absent from the catalog must be reported, not KeyError'd.
+
+        The check used to sit *after* ``sel_data.loc[targetids]``, so pandas
+        raised ``KeyError: '[...] not in index'`` first and the intended
+        message was unreachable. It was also missing its f-string prefix, so
+        it would have printed the literal braces had it ever run (#32).
+        """
+        import unittest.mock as mock
+
+        import pandas as pd
+
+        # Catalog knows target 2 only; 1 and 3 are missing.
+        frame = pd.DataFrame(
+            {
+                "SURVEY": ["main"],
+                "PROGRAM": ["bright"],
+                "HEALPIX": [8072],
+                "TARGETID": [2],
+            }
+        )
+        with mock.patch.dict(
+            os.environ, {"DESI_SPECTRO_REDUX": str(self.root)}
+        ), mock.patch.object(
+            self.spectra_io, "_sel_objects_fits", return_value=frame
+        ):
+            with self.assertRaises(ValueError) as caught:
+                self.spectra_io.get_spectra(
+                    [1, 2, 3], "fuji", n_workers=1, use_db=False
+                )
+        message = str(caught.exception)
+        self.assertIn("1", message)
+        self.assertIn("3", message)
+        self.assertIn("fuji", message)
+        self.assertNotIn("{", message, "message is not an f-string")
+
     def test_healpix_column_accepts_both_names(self):
         """matterhorn renamed HEALPIX to UNIQPIX."""
         pick = self.spectra_io._healpix_column

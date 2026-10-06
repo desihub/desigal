@@ -285,16 +285,37 @@ def get_spectra(
         sel_data = _sel_objects_fits(release, release_path, targetids)
 
     sel_data = sel_data.set_index("TARGETID", drop=False)
+
+    # Check before the .loc below rather than after it: .loc raises its own
+    # KeyError ("[...] not in index") for anything missing, which says nothing
+    # about what went wrong or what to do next.
+    found_targets_bool = np.isin(targetids, sel_data.index.values)
+    if not np.all(found_targets_bool):
+        missing = np.asarray(targetids)[~found_targets_bool]
+        message = (
+            f"{missing.size} of {len(targetids)} requested target ids were not "
+            f"found in release '{release}': {missing.tolist()[:10]}"
+            f"{' ...' if missing.size > 10 else ''}."
+        )
+        if use_db:
+            message += (
+                " These were looked up in the redshift database, which can be "
+                "incomplete relative to the zcatalog -- some fuji targets are "
+                "in zall-pix but absent from fuji.zpix, for instance. Try "
+                "use_db=False to search the zcatalog file instead."
+            )
+        else:
+            message += (
+                " Note that only ZCAT_PRIMARY spectra are selected, so a "
+                "target observed only as a non-primary will not be found."
+            )
+        raise ValueError(message)
+
     sel_data = sel_data.loc[targetids]
     sel_data = Table.from_pandas(sel_data)
     file_sorted = sel_data.argsort(keys=["SURVEY", "PROGRAM", "HEALPIX", "TARGETID"])
     inverse_sorted = np.argsort(file_sorted)
     sel_data = sel_data[file_sorted]
-    found_targets_bool = np.isin(targetids, sel_data["TARGETID"])
-    if ~np.all(found_targets_bool):
-        raise ValueError(
-            "Spectra for target ids {targetids[~found_targets_bool]} not found!"
-        )
     # adding special case so as to have the option to parallelize externally
     if n_workers == 1:
         sel_spectra = [
