@@ -32,8 +32,12 @@ def deredshift(data_in, z_in, z_out, data_type):
     exponent_dict = {"flux": -1, "wave": 1, "ivar": 2}
     assert data_type in exponent_dict.keys(), "Not a valid Data Type"
 
+    z_in = np.asarray(z_in)
+    z_out = np.asarray(z_out)
     if z_in.ndim == 1:
         z_in = z_in[:, np.newaxis]
+    if z_out.ndim == 1:
+        z_out = z_out[:, np.newaxis]
     exponent = exponent_dict[data_type]
 
     if isinstance(data_in, np.ndarray):
