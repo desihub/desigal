@@ -36,6 +36,12 @@ HEALPIX_COLUMNS = ("HEALPIX", "UNIQPIX")
 #: exhaust memory: loa's zall-pix is 47 GB, of which these five are 3.9 GB.
 ZCAT_COLUMNS = ("TARGETID", "SURVEY", "PROGRAM", "ZCAT_PRIMARY")
 
+#: HDUs skipped when reading a coadd file. RESOLUTION is by far the largest and
+#: nothing in the stacking path uses it. MASK is deliberately *not* skipped:
+#: masks are not applied when coadding across cameras, so dropping them gives
+#: quietly wrong spectra.
+DEFAULT_SKIP_HDUS = ("EXP_FIBERMAP", "SCORES", "EXTRA_CATALOG", "RESOLUTION")
+
 
 def _spectro_redux():
     """Root of the spectroscopic reductions, from $DESI_SPECTRO_REDUX."""
@@ -196,7 +202,8 @@ def _release_has_db(release):
 
 
 def get_spectra(
-    targetids, release, n_workers=-1, use_db=True, zcat_table=None, **kwargs
+    targetids, release, n_workers=-1, use_db=True, zcat_table=None,
+    skip_hdus=None, **kwargs
 ):
     """
     Get spectra for a list of targetids.
@@ -239,6 +246,13 @@ def get_spectra(
 
         Only rows with ``ZCAT_PRIMARY`` true are used, so a target present
         solely as a non-primary spectrum will be reported as not found.
+    skip_hdus : tuple of str, optional
+        HDUs not to read from each coadd file, passed to
+        `desispec.io.read_spectra`. Defaults to `DEFAULT_SKIP_HDUS`, which
+        drops EXP_FIBERMAP, SCORES, EXTRA_CATALOG and RESOLUTION. Pass an
+        empty tuple to read everything. Note that skipping MASK is a bad
+        idea: masks are not applied when coadding across cameras, so without
+        them the spectra are quietly wrong.
 
     Returns
     -------
@@ -332,34 +346,45 @@ def get_spectra(
 
     sel_data = sel_data.loc[targetids]
     sel_data = Table.from_pandas(sel_data)
-    file_sorted = sel_data.argsort(keys=["SURVEY", "PROGRAM", "HEALPIX", "TARGETID"])
-    inverse_sorted = np.argsort(file_sorted)
-    sel_data = sel_data[file_sorted]
+
+    # Group the targets by the file they live in, so each coadd file is opened
+    # once however many targets it holds. Reading one target at a time reopened
+    # a ~450 MB file per target, which dominated the runtime (#24).
+    groups = {}
+    for survey, program, healpix, targetid in zip(
+        sel_data["SURVEY"],
+        sel_data["PROGRAM"],
+        sel_data["HEALPIX"],
+        sel_data["TARGETID"],
+    ):
+        key = (str(survey), str(program), int(healpix))
+        groups.setdefault(key, []).append(int(targetid))
+    groups = list(groups.items())
+
+    if skip_hdus is None:
+        skip_hdus = DEFAULT_SKIP_HDUS
+
     # adding special case so as to have the option to parallelize externally
     if n_workers == 1:
         sel_spectra = [
-            _read_spectra(survey, program, healpix, targetid, coadd_dir)
-            for survey, program, healpix, targetid in zip(
-                sel_data["SURVEY"],
-                sel_data["PROGRAM"],
-                sel_data["HEALPIX"],
-                sel_data["TARGETID"],
-            )
+            _read_spectra(survey, program, healpix, tids, coadd_dir, skip_hdus)
+            for (survey, program, healpix), tids in groups
         ]
     else:
-        sel_spectra = Parallel(n_jobs=n_workers)(
-            delayed(_read_spectra)(survey, program, healpix, targetid, coadd_dir)
-            for survey, program, healpix, targetid in zip(
-                sel_data["SURVEY"],
-                sel_data["PROGRAM"],
-                sel_data["HEALPIX"],
-                sel_data["TARGETID"],
+        sel_spectra = Parallel(n_jobs=min(n_workers, len(groups)))(
+            delayed(_read_spectra)(
+                survey, program, healpix, tids, coadd_dir, skip_hdus
             )
+            for (survey, program, healpix), tids in groups
         )
-    sorted_spectra = []
-    for i in range(len(inverse_sorted)):
-        sorted_spectra.append(sel_spectra[inverse_sorted[i]])
-    return stack(sorted_spectra)  # stack(np.array(sel_spectra)[inverse_sorted])
+
+    spectra = stack(sel_spectra)
+    # stack() returns them grouped by file; restore the requested order.
+    position = {
+        int(targetid): row
+        for row, targetid in enumerate(spectra.fibermap["TARGETID"])
+    }
+    return spectra[[position[int(t)] for t in targetids]]
 
 
 def _sel_objects_fits(release, release_path, targetids, **kwargs):
@@ -473,11 +498,15 @@ def _sel_objects_db(release, targetids, **kwargs):
     return sel_data
 
 
-def _read_spectra(survey, program, healpix, targetid, coadd_dir):
-    """Read a single spectra file. Helper function of get_spectra.
+def _read_spectra(survey, program, healpix, targetids, coadd_dir, skip_hdus=None):
+    """Read every requested target from one coadd file.
 
-    ``coadd_dir`` is the resolved coadd root for the release -- ``healpix`` up
-    to loa, ``spectra`` from matterhorn on -- as returned by `_coadd_dir`.
+    Helper function of get_spectra. ``coadd_dir`` is the resolved coadd root
+    for the release -- ``healpix`` up to loa, ``spectra`` from matterhorn on --
+    as returned by `_coadd_dir`.
+
+    Takes a list of target ids rather than one, so a file holding several
+    requested targets is opened once rather than once per target.
     """
     healpix = int(healpix)
     data_path = (
@@ -488,22 +517,11 @@ def _read_spectra(survey, program, healpix, targetid, coadd_dir):
         / str(healpix)
         / f"coadd-{survey}-{program}-{healpix}.fits"
     )
-    spectra = read_single_spectrum(
-        data_path,
-        targetid,
-        read_hdu={
-            "FIBERMAP": True,
-            "EXP_FIBERMAP": False,
-            "SCORES": False,
-            "EXTRA_CATALOG": False,
-            "MASK": False,
-            "RESOLUTION": False,
-        },
+    return desispec.io.read_spectra(
+        str(data_path),
+        targetids=list(targetids),
+        skip_hdus=DEFAULT_SKIP_HDUS if skip_hdus is None else skip_hdus,
     )
-    # spectra = desispec.io.read_spectra(data_path)
-    # mask = np.isin(spectra.fibermap["TARGETID"], targetid)
-    # spectra = spectra[mask]
-    return spectra
 
 
 def read_single_spectrum(
