@@ -201,6 +201,107 @@ def _release_has_db(release):
         return False
 
 
+def find_target(targetids, releases=None, use_db=True, verbose=True):
+    """Find which data releases contain the given targets.
+
+    Answers "I have a TARGETID but I do not know which release it is in".
+    Searches each release's redshift catalog and reports every match, so the
+    result can be fed straight back into `get_spectra` with a known release.
+
+    The redshift database is used where it can serve a release, since that
+    turns a multi-GB file scan into a fast query. Releases the database does
+    not cover -- kibo and matterhorn at the time of writing -- fall back to
+    scanning the TARGETID column of the zcatalog, which takes of order a
+    minute each.
+
+    Parameters
+    ----------
+    targetids : int or list of int
+        Target id(s) to look for.
+    releases : list of str, optional
+        Releases to search. Defaults to everything `list_releases` reports,
+        including catalog-only releases such as jura: a target may be
+        findable there even though its spectra are not at NERSC.
+    use_db : bool, optional
+        Use the redshift database where available, by default True. Pass
+        False to scan the zcatalog files for every release instead.
+    verbose : bool, optional
+        Log progress per release, by default True. The FITS fallback is slow
+        enough to be worth narrating.
+
+    Returns
+    -------
+    astropy.table.Table
+        One row per match, with columns RELEASE, TARGETID, SURVEY, PROGRAM,
+        HEALPIX and HAS_SPECTRA. Empty if nothing matched. HAS_SPECTRA is
+        False for a release whose coadds are not on disk, meaning the target
+        is catalogued there but `get_spectra` cannot read it.
+
+    Notes
+    -----
+    This searches *released* productions only. It does not cover the ``daily``
+    reduction, which has no healpix coadds and no zcatalog -- see the package
+    documentation for what that would require.
+
+    Examples
+    --------
+    >>> hits = find_target(39628473202905921)
+    >>> hits["RELEASE", "SURVEY", "PROGRAM", "HEALPIX"]
+    >>> spectra = get_spectra([39628473202905921], hits["RELEASE"][0])
+    """
+    log = get_logger()
+    targetids = np.atleast_1d(targetids).astype(np.int64)
+    if releases is None:
+        releases = list_releases(require_spectra=False)
+
+    root = _spectro_redux()
+    rows = []
+    for release in releases:
+        release_path = root / release
+        try:
+            has_spectra = True
+            try:
+                _coadd_dir(release_path)
+            except FileNotFoundError:
+                has_spectra = False
+
+            if use_db and _release_has_db(release):
+                if verbose:
+                    log.info("Searching %s via the database.", release)
+                found = _sel_objects_db(release, targetids.tolist())
+            else:
+                if verbose:
+                    log.info(
+                        "Searching %s by scanning its zcatalog; this is slow.",
+                        release,
+                    )
+                found = _sel_objects_fits(release, release_path, targetids)
+        except ValueError:
+            # No match in this release, which is an ordinary outcome here.
+            continue
+        except Exception as exc:  # a release we cannot search is not fatal
+            if verbose:
+                log.warning("Skipping %s: %s", release, exc)
+            continue
+
+        for _, match in found.iterrows():
+            rows.append(
+                (
+                    release,
+                    int(match["TARGETID"]),
+                    str(match["SURVEY"]),
+                    str(match["PROGRAM"]),
+                    int(match["HEALPIX"]),
+                    has_spectra,
+                )
+            )
+
+    names = ("RELEASE", "TARGETID", "SURVEY", "PROGRAM", "HEALPIX", "HAS_SPECTRA")
+    if not rows:
+        return Table(names=names, dtype=("U20", "i8", "U20", "U20", "i8", "bool"))
+    return Table(rows=rows, names=names)
+
+
 def get_spectra(
     targetids, release, n_workers=-1, use_db=True, zcat_table=None,
     skip_hdus=None, **kwargs

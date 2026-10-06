@@ -577,6 +577,40 @@ class TestStackSpectra(unittest.TestCase):
             )
 
 
+def _build_release_tree(case):
+    """Build a synthetic $DESI_SPECTRO_REDUX on a temp dir, mirroring the real
+    layouts. Sets ``case.root`` and ``case.spectra_io`` and registers cleanup.
+    """
+    import tempfile
+
+    from ..specutils import spectra_io
+
+    case.spectra_io = spectra_io
+    tmp = tempfile.TemporaryDirectory()
+    case.root = Path(tmp.name)
+    case.addCleanup(tmp.cleanup)
+
+    def make(release, coadd, catalogs):
+        base = case.root / release
+        if coadd:
+            (base / coadd / "main" / "bright" / "80" / "8072").mkdir(parents=True)
+        for rel_dir in catalogs:
+            d = base / "zcatalog" / rel_dir if rel_dir else base / "zcatalog"
+            d.mkdir(parents=True, exist_ok=True)
+            (d / f"zall-pix-{release}.fits").touch()
+
+    make("fuji", "healpix", [""])
+    make("guadalupe", "healpix", ["v1"])
+    make("iron", "healpix", ["v0", "v1", "v1/deprecated"])
+    make("jura", None, ["v1"])
+    make("kibo", "healpix", ["v1", "v1.1"])
+    make("loa", "healpix", ["v1", "v1/deprecated"])
+    make("matterhorn", "spectra", ["v2/zall"])
+    # A personal reduction: has a zcatalog, but no release-named catalog.
+    (case.root / "dylang" / "zcatalog" / "v2").mkdir(parents=True)
+    (case.root / "dylang" / "healpix").mkdir(parents=True)
+
+
 class TestReleaseLayout(unittest.TestCase):
     """Data-release discovery and path resolution in spectra_io.
 
@@ -598,34 +632,7 @@ class TestReleaseLayout(unittest.TestCase):
     """
 
     def setUp(self):
-        import tempfile
-
-        from ..specutils import spectra_io
-
-        self.spectra_io = spectra_io
-        self._tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self._tmp.name)
-        self.addCleanup(self._tmp.cleanup)
-
-        def make(release, coadd, catalogs):
-            base = self.root / release
-            if coadd:
-                (base / coadd / "main" / "bright" / "80" / "8072").mkdir(parents=True)
-            for rel_dir in catalogs:
-                d = base / "zcatalog" / rel_dir if rel_dir else base / "zcatalog"
-                d.mkdir(parents=True, exist_ok=True)
-                (d / f"zall-pix-{release}.fits").touch()
-
-        make("fuji", "healpix", [""])
-        make("guadalupe", "healpix", ["v1"])
-        make("iron", "healpix", ["v0", "v1", "v1/deprecated"])
-        make("jura", None, ["v1"])
-        make("kibo", "healpix", ["v1", "v1.1"])
-        make("loa", "healpix", ["v1", "v1/deprecated"])
-        make("matterhorn", "spectra", ["v2/zall"])
-        # A personal reduction: has a zcatalog, but no release-named catalog.
-        (self.root / "dylang" / "zcatalog" / "v2").mkdir(parents=True)
-        (self.root / "dylang" / "healpix").mkdir(parents=True)
+        _build_release_tree(self)
 
     def test_list_releases_finds_real_releases_only(self):
         """Personal reduction directories must not be reported as releases."""
@@ -805,6 +812,85 @@ class TestReleaseLayout(unittest.TestCase):
         self.assertEqual(pick(["TARGETID", "UNIQPIX"]), "UNIQPIX")
         with self.assertRaises(KeyError):
             pick(["TARGETID", "SURVEY"])
+
+
+class TestFindTarget(unittest.TestCase):
+    """Searching across releases for a target id.
+
+    Uses the same synthetic release tree and stubs the catalog lookups, so
+    nothing here touches DESI data or the database.
+    """
+
+    def setUp(self):
+        _build_release_tree(self)
+
+    def _run(self, per_release, targetid=42, **kwargs):
+        """Run find_target with the catalog lookups stubbed out.
+
+        ``per_release`` maps a release name to the rows that release should
+        report; anything absent raises ValueError, as the real lookups do when
+        they match nothing.
+        """
+        import unittest.mock as mock
+
+        import pandas as pd
+
+        def fake_fits(release, release_path, targetids, **kw):
+            if release not in per_release:
+                raise ValueError("no match")
+            return pd.DataFrame(per_release[release])
+
+        with mock.patch.dict(
+            os.environ, {"DESI_SPECTRO_REDUX": str(self.root)}
+        ), mock.patch.object(
+            self.spectra_io, "_sel_objects_fits", side_effect=fake_fits
+        ), mock.patch.object(
+            self.spectra_io, "_release_has_db", return_value=False
+        ):
+            return self.spectra_io.find_target(targetid, verbose=False, **kwargs)
+
+    @staticmethod
+    def _row(targetid=42, healpix=8072):
+        return {
+            "TARGETID": [targetid],
+            "SURVEY": ["main"],
+            "PROGRAM": ["bright"],
+            "HEALPIX": [healpix],
+        }
+
+    def test_reports_every_release_holding_the_target(self):
+        hits = self._run({"iron": self._row(), "loa": self._row()})
+        self.assertEqual(sorted(hits["RELEASE"]), ["iron", "loa"])
+        self.assertEqual(set(hits["TARGETID"]), {42})
+
+    def test_empty_table_when_nothing_matches(self):
+        """No match is an ordinary outcome, not an error."""
+        hits = self._run({})
+        self.assertEqual(len(hits), 0)
+        self.assertEqual(
+            hits.colnames,
+            ["RELEASE", "TARGETID", "SURVEY", "PROGRAM", "HEALPIX", "HAS_SPECTRA"],
+        )
+
+    def test_has_spectra_false_for_catalog_only_release(self):
+        """jura catalogues targets whose spectra are not at NERSC."""
+        hits = self._run({"jura": self._row(), "loa": self._row()})
+        flags = dict(zip(hits["RELEASE"], hits["HAS_SPECTRA"]))
+        self.assertFalse(flags["jura"])
+        self.assertTrue(flags["loa"])
+
+    def test_releases_argument_limits_the_search(self):
+        hits = self._run(
+            {"iron": self._row(), "loa": self._row()}, releases=["loa"]
+        )
+        self.assertEqual(list(hits["RELEASE"]), ["loa"])
+
+    def test_result_feeds_back_into_get_spectra(self):
+        """The columns must be the ones get_spectra needs downstream."""
+        hits = self._run({"loa": self._row(healpix=1234)})
+        self.assertEqual(int(hits["HEALPIX"][0]), 1234)
+        self.assertEqual(str(hits["SURVEY"][0]), "main")
+        self.assertEqual(str(hits["PROGRAM"][0]), "bright")
 
 
 class TestKnownBugs(unittest.TestCase):
