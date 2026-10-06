@@ -9,7 +9,6 @@ possible normalization methods:
 NOTE: Masks currently marked by np.nan values
 """
 
-from crypt import methods
 import numpy as np
 import numpy.ma as ma
 from scipy import integrate, interpolate
