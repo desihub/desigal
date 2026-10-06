@@ -88,28 +88,41 @@ def stack_spectra(
         n_workers=n_workers,
     )
     
-    # Check if spectra can be normalized.
-    wpad = 2 * np.median(np.abs(np.diff(output_wave_grid)))
-    if np.min(output_wave_grid) > (norm_flux_window[0] - wpad) or np.max(output_wave_grid) < (norm_flux_window[1] + wpad):
-        raise ValueError("Flux window is outside of wavelength range.")
+    # Check if spectra can be normalized. Only the flux-window method needs a
+    # window, so everything that depends on norm_flux_window lives in here.
+    if norm_method == "flux-window":
+        if norm_flux_window is None:
+            raise ValueError(
+                'norm_flux_window must be provided when norm_method="flux-window"'
+            )
+        wpad = 2 * np.median(np.abs(np.diff(output_wave_grid)))
+        if np.min(output_wave_grid) > (norm_flux_window[0] - wpad) or np.max(
+            output_wave_grid
+        ) < (norm_flux_window[1] + wpad):
+            raise ValueError("Flux window is outside of wavelength range.")
 
-    wave_mask = np.tile(np.expand_dims(
-        (output_wave_grid > (norm_flux_window[0] - wpad)) * (output_wave_grid < (norm_flux_window[1] + wpad))
-        , axis=0), (len(flux_grid),1))
-    total_mask = np.all(
-        [
-            wave_mask,
-            ivar_grid > 0,
-            np.isfinite(flux_grid),
-        ],
-        axis=0,
-    )
-    if norm_method=='flux-window':
+        wave_mask = np.tile(np.expand_dims(
+            (output_wave_grid > (norm_flux_window[0] - wpad)) * (output_wave_grid < (norm_flux_window[1] + wpad))
+            , axis=0), (len(flux_grid),1))
+        total_mask = np.all(
+            [
+                wave_mask,
+                ivar_grid > 0,
+                np.isfinite(flux_grid),
+            ],
+            axis=0,
+        )
         norm_mask = np.sum(total_mask, axis=1) / np.sum(wave_mask, axis=1) > 0.8
         if np.any(~norm_mask):
-            print('The following spectra were excluded as they could not be normalized: ', list(spectra.target_ids()[~norm_mask]))
+            if spectra is not None:
+                excluded = np.asarray(spectra.target_ids())[~norm_mask].tolist()
+                print('The following spectra were excluded as they could not be normalized: ', excluded)
+            else:
+                # No Spectra object was supplied, so report row indices instead.
+                print('The following spectra (row indices) were excluded as they could not be normalized: ',
+                      np.where(~norm_mask)[0].tolist())
     else:
-        norm_mask = np.ones_like(np.sum(total_mask, axis=1), dtype='bool')
+        norm_mask = np.ones(len(flux_grid), dtype=bool)
         
     # Normalize the spectra
     flux_normed, ivar_normed = normalize(
