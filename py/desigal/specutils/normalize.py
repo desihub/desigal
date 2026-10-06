@@ -48,8 +48,8 @@ def integrate_flux(wave, flux, ivar, w1, w2):
     wave = np.insert(wave[I], [0, len(I)], [w1, w2])
     flux = np.insert(flux[I], [0, len(I)], [f1, f2])
     ivar = np.insert(ivar[I], [0, len(I)], [i1, i2])
-    weight = integrate.simps(x=wave, y=ivar)
-    index = integrate.simps(x=wave, y=flux * ivar) / weight
+    weight = integrate.simpson(x=wave, y=ivar)
+    index = integrate.simpson(x=wave, y=flux * ivar) / weight
     index_ivar = weight
     return index, index_ivar
 
