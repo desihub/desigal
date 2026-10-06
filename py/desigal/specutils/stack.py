@@ -57,7 +57,11 @@ def stack_spectra(
 
     # Coadd cameras if needed
     if isinstance(flux, dict):
-        flux, wave, ivar = coadd_cameras(flux, wave, ivar, mask)
+        # coadd_cameras returns a 4-tuple only when a mask is supplied.
+        if mask is None:
+            flux, wave, ivar = coadd_cameras(flux, wave, ivar)
+        else:
+            flux, wave, ivar, mask = coadd_cameras(flux, wave, ivar, mask_cam=mask)
     
     # Multiply spectra if wanted
     if multiplication_factor is not None:
