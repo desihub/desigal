@@ -742,6 +742,62 @@ class TestReleaseLayout(unittest.TestCase):
         self.assertIn("fuji", message)
         self.assertNotIn("{", message, "message is not an f-string")
 
+    def test_targets_are_grouped_one_read_per_file(self):
+        """Each coadd file must be opened once, not once per target (#24).
+
+        Reading one target at a time reopened a ~450 MB file per target, which
+        dominated the runtime.
+        """
+        import unittest.mock as mock
+
+        import pandas as pd
+
+        # Six targets spread over three files, deliberately interleaved so
+        # grouping cannot fall out of the input ordering by accident.
+        frame = pd.DataFrame(
+            {
+                "SURVEY": ["main"] * 6,
+                "PROGRAM": ["dark"] * 6,
+                "HEALPIX": [10, 20, 10, 30, 20, 10],
+                "TARGETID": [1, 2, 3, 4, 5, 6],
+            }
+        )
+
+        def fake_read(survey, program, healpix, targetids, coadd_dir, skip_hdus):
+            return (healpix, tuple(targetids))
+
+        with mock.patch.dict(
+            os.environ, {"DESI_SPECTRO_REDUX": str(self.root)}
+        ), mock.patch.object(
+            self.spectra_io, "_sel_objects_fits", return_value=frame
+        ), mock.patch.object(
+            self.spectra_io, "_read_spectra", side_effect=fake_read
+        ) as reader, mock.patch.object(
+            self.spectra_io, "stack", side_effect=lambda specs: specs
+        ):
+            # stack() is stubbed out, so the reorder step cannot run; we only
+            # care which reads were issued.
+            try:
+                self.spectra_io.get_spectra(
+                    [1, 2, 3, 4, 5, 6], "fuji", n_workers=1, use_db=False
+                )
+            except Exception:
+                pass
+
+        calls = reader.call_args_list
+        self.assertEqual(len(calls), 3, "expected one read per distinct file")
+        grouped = {c.args[2]: sorted(c.args[3]) for c in calls}
+        self.assertEqual(grouped, {10: [1, 3, 6], 20: [2, 5], 30: [4]})
+
+    def test_mask_hdu_is_not_skipped_by_default(self):
+        """Masks are not applied when coadding across cameras (#24).
+
+        Dropping the MASK HDU therefore gives quietly wrong spectra, so it
+        must not be in the default skip list.
+        """
+        self.assertNotIn("MASK", self.spectra_io.DEFAULT_SKIP_HDUS)
+        self.assertIn("RESOLUTION", self.spectra_io.DEFAULT_SKIP_HDUS)
+
     def test_healpix_column_accepts_both_names(self):
         """matterhorn renamed HEALPIX to UNIQPIX."""
         pick = self.spectra_io._healpix_column
