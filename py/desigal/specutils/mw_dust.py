@@ -1,10 +1,25 @@
 import numpy as np
 from desiutil.dust import SFDMap, dust_transmission
-sfdmap = SFDMap()
+
+_sfdmap = None
+
+
+def _get_sfdmap():
+    """Return the SFD dust map, instantiating it on first use.
+
+    SFDMap() raises unless $DUST_DIR is set, so this is deferred rather than
+    done at module scope: importing desigal should not require the dust maps
+    for code paths that never touch dust correction.
+    """
+    global _sfdmap
+    if _sfdmap is None:
+        _sfdmap = SFDMap()
+    return _sfdmap
+
 
 def _mw_dust_correct(data_in, wave, ra, dec, exponent):
     """calculates the wl dependent MW dust correction"""
-    ebv_sfd = sfdmap.ebv(ra, dec)
+    ebv_sfd = _get_sfdmap().ebv(ra, dec)
     transmission = np.array(
         [
             dust_transmission(wav, ebv)
