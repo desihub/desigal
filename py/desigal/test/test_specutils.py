@@ -361,6 +361,80 @@ class TestResample(unittest.TestCase):
         good = np.isfinite(fc[0]) & np.isfinite(sn)
         np.testing.assert_allclose(sn[good], fc[0][good], rtol=1e-9)
 
+    def test_sn_cons_zero_ivar_does_not_produce_nan(self):
+        """A masked input pixel must not poison the whole output ivar.
+
+        1/ivar is inf for a no-data pixel, and 0 * inf = nan for every zero
+        entry of the projection matrix -- which is most of it. A single masked
+        pixel used to turn almost the entire output ivar into nan.
+        """
+        from ..specutils.resample import _sn_conserving_resample
+
+        ivar = np.full(self.n, 4.0)
+        ivar[1000] = 0.0
+        _, out_ivar = _sn_conserving_resample(
+            self.wave, self.model.copy(), self.wave_new, ivar=ivar
+        )
+        self.assertFalse(np.any(np.isnan(out_ivar)), "nan in resampled ivar")
+        self.assertFalse(np.any(np.isinf(out_ivar)), "inf in resampled ivar")
+        self.assertTrue(np.any(out_ivar > 0), "every bin was discarded")
+
+    def test_sn_cons_zero_ivar_leaves_clean_bins_untouched(self):
+        """Masking one pixel must not perturb bins that do not overlap it."""
+        from ..specutils.resample import _sn_conserving_resample
+
+        clean = np.full(self.n, 4.0)
+        holed = clean.copy()
+        holed[1000] = 0.0
+        _, ivar_clean = _sn_conserving_resample(
+            self.wave, self.model.copy(), self.wave_new, ivar=clean.copy()
+        )
+        _, ivar_holed = _sn_conserving_resample(
+            self.wave, self.model.copy(), self.wave_new, ivar=holed
+        )
+        survived = ivar_holed > 0
+        np.testing.assert_array_equal(
+            ivar_holed[survived], ivar_clean[survived]
+        )
+
+    def test_sn_cons_masked_region_maps_to_zero_ivar(self):
+        """A masked wavelength range must come out masked, and only it."""
+        from ..specutils.resample import _sn_conserving_resample
+
+        ivar = np.full(self.n, 4.0)
+        ivar[(self.wave > 4800.0) & (self.wave < 4900.0)] = 0.0
+        _, out_ivar = _sn_conserving_resample(
+            self.wave, self.model.copy(), self.wave_new, ivar=ivar
+        )
+        inside = (self.wave_new > 4810.0) & (self.wave_new < 4890.0)
+        outside = (self.wave_new > 4300.0) & (self.wave_new < 4700.0)
+        self.assertTrue(np.all(out_ivar[inside] == 0.0))
+        self.assertTrue(np.all(out_ivar[outside] > 0.0))
+
+    def test_sn_cons_unmasked_input_is_unaffected(self):
+        """With no masked pixels the result must match the original formula.
+
+        Pins backward compatibility: the zero-ivar handling must be inert when
+        there is no zero ivar.
+        """
+        from ..specutils.resample import _project, _sn_conserving_resample
+
+        ivar = np.random.default_rng(1).uniform(1.0, 9.0, self.n)
+
+        # The pre-fix expression, inline.
+        flux_per_bin = self.model * np.gradient(self.wave)
+        projection = _project(self.wave, self.wave_new)
+        expect_flux = projection.dot(flux_per_bin) / np.gradient(self.wave_new)
+        scaled = ivar / np.gradient(self.wave) ** 2.0
+        expect_ivar = 1.0 / projection.dot(scaled ** (-1.0))
+        expect_ivar *= np.gradient(self.wave_new) ** 2.0
+
+        got_flux, got_ivar = _sn_conserving_resample(
+            self.wave, self.model.copy(), self.wave_new, ivar=ivar.copy()
+        )
+        np.testing.assert_array_equal(got_flux, expect_flux)
+        np.testing.assert_array_equal(got_ivar, expect_ivar)
+
     def test_sn_cons_rejects_overhanging_output_grid(self):
         """_project needs the output grid inside the input grid (#48).
 

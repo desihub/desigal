@@ -158,7 +158,24 @@ def _sn_conserving_resample(wave,flux,outwave,ivar=None):
         return newflux
     else:
         ivar = ivar/(np.gradient(wave))**2.0
-        newvar=Pr.dot(ivar**(-1.0)) #- maintaining Total S/N
+
+        # Not part of the vendored body: pixels with no data (ivar <= 0) have
+        # infinite variance, and feeding 1/ivar = inf into the projection makes
+        # 0 * inf = nan for every zero entry of Pr. Pr is mostly zeros, so a
+        # single masked input pixel turned almost the whole output ivar into
+        # nan -- and real DESI coadds always carry masked pixels.
+        #
+        # Keep the variance array finite, and instead flag the output bins that
+        # draw any weight from a no-data pixel. Those bins genuinely contain a
+        # gap, so they get ivar = 0 ("no information") rather than a number
+        # computed from data that is not there. Using ivar[good] ** (-1.0)
+        # rather than 1.0 / ivar[good] keeps the all-good case bit-identical to
+        # the original expression.
+        nodata = ~(ivar > 0)
+        var = np.zeros_like(ivar)
+        var[~nodata] = ivar[~nodata] ** (-1.0)
+        newvar = Pr.dot(var) #- maintaining Total S/N
+        contaminated = Pr[:, nodata].sum(axis=1) > 0
         # RK:  this is just a kludge until we more robustly ensure newvar is correct
         k = np.where(newvar <= 0.0)[0]
         newvar[k] = 0.0000001  # flag bins with no contribution from input grid
@@ -167,6 +184,8 @@ def _sn_conserving_resample(wave,flux,outwave,ivar=None):
 
         #- convert to per angstrom
         newivar*=(np.gradient(outwave))**2.0
+        # Output bins overlapping a no-data input pixel carry no information.
+        newivar[contaminated] = 0.0
         return newflux, newivar
 
 def sn_conserving_resample(
