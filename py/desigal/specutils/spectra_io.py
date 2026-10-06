@@ -217,9 +217,28 @@ def get_spectra(
         Needs an initial setup of the `~/.pgpass` file. See https://desi.lbl.gov/trac/wiki/DESIProductionDatabase#Setuppgpass
         Releases the database cannot serve fall back to the zcatalog FITS
         file with a warning; see Notes.
-    zcat_table : astropy.Table.table, optional
-        Use pre-loaded zcat table to get the list of spectra files. This is only used when
-        use_dp=False and a zcat_table is specified.
+    zcat_table : astropy.table.Table, optional
+        Pre-loaded redshift catalog to locate the spectra from, used only when
+        ``use_db=False``. Useful for a custom or filtered catalog, or to avoid
+        re-reading a large zcatalog across repeated calls.
+
+        It must carry these columns:
+
+        ``TARGETID``
+            Target identifiers to match against.
+        ``SURVEY``, ``PROGRAM``
+            Used to build the coadd file path.
+        ``HEALPIX`` or ``UNIQPIX``
+            Healpix number, also part of the path. Named ``UNIQPIX`` from
+            matterhorn on; either is accepted.
+        ``ZCAT_PRIMARY``
+            Optional. If absent it is computed with
+            `desispec.zcatalog.find_primary_spectra`, which additionally
+            needs ``ZWARN`` and the sort column (``TSNR2_LRG`` by default,
+            override with ``sort_column=...``).
+
+        Only rows with ``ZCAT_PRIMARY`` true are used, so a target present
+        solely as a non-primary spectrum will be reported as not found.
 
     Returns
     -------
