@@ -25,6 +25,7 @@ import os
 import subprocess
 import sys
 import unittest
+from pathlib import Path
 
 import numpy as np
 from astropy.table import Table
@@ -574,6 +575,144 @@ class TestStackSpectra(unittest.TestCase):
                 flux=flux, wave=wave, ivar=ivar, fibermap=fibermap(),
                 redshift=None, bootstrap=False, n_workers=1,
             )
+
+
+class TestReleaseLayout(unittest.TestCase):
+    """Data-release discovery and path resolution in spectra_io.
+
+    Built on a synthetic directory tree that mirrors the real layouts, so
+    these need no DESI data and run instantly. The layouts reproduced here
+    are, as of 2026-10:
+
+    ==========  ============  ================================
+    release     coadd dir     zall-pix location
+    ==========  ============  ================================
+    fuji        healpix/      zcatalog/
+    guadalupe   healpix/      zcatalog/v1/
+    iron        healpix/      zcatalog/v1/   (+ v0, + deprecated/)
+    jura        none          zcatalog/v1/
+    kibo        healpix/      zcatalog/v1.1/ (+ v1)
+    loa         healpix/      zcatalog/v1/   (+ deprecated/)
+    matterhorn  spectra/      zcatalog/v2/zall/
+    ==========  ============  ================================
+    """
+
+    def setUp(self):
+        import tempfile
+
+        from ..specutils import spectra_io
+
+        self.spectra_io = spectra_io
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+
+        def make(release, coadd, catalogs):
+            base = self.root / release
+            if coadd:
+                (base / coadd / "main" / "bright" / "80" / "8072").mkdir(parents=True)
+            for rel_dir in catalogs:
+                d = base / "zcatalog" / rel_dir if rel_dir else base / "zcatalog"
+                d.mkdir(parents=True, exist_ok=True)
+                (d / f"zall-pix-{release}.fits").touch()
+
+        make("fuji", "healpix", [""])
+        make("guadalupe", "healpix", ["v1"])
+        make("iron", "healpix", ["v0", "v1", "v1/deprecated"])
+        make("jura", None, ["v1"])
+        make("kibo", "healpix", ["v1", "v1.1"])
+        make("loa", "healpix", ["v1", "v1/deprecated"])
+        make("matterhorn", "spectra", ["v2/zall"])
+        # A personal reduction: has a zcatalog, but no release-named catalog.
+        (self.root / "dylang" / "zcatalog" / "v2").mkdir(parents=True)
+        (self.root / "dylang" / "healpix").mkdir(parents=True)
+
+    def test_list_releases_finds_real_releases_only(self):
+        """Personal reduction directories must not be reported as releases."""
+        found = self.spectra_io.list_releases(
+            spectro_redux=self.root, require_spectra=False
+        )
+        self.assertEqual(
+            found,
+            ["fuji", "guadalupe", "iron", "jura", "kibo", "loa", "matterhorn"],
+        )
+        self.assertNotIn("dylang", found)
+
+    def test_list_releases_excludes_catalog_only_by_default(self):
+        """jura has a zcatalog but no coadds, so it cannot serve spectra."""
+        found = self.spectra_io.list_releases(spectro_redux=self.root)
+        self.assertNotIn("jura", found)
+        self.assertIn("matterhorn", found)
+
+    def test_coadd_dir_handles_both_names(self):
+        """healpix/ up to loa, spectra/ from matterhorn on."""
+        self.assertEqual(
+            self.spectra_io._coadd_dir(self.root / "loa").name, "healpix"
+        )
+        self.assertEqual(
+            self.spectra_io._coadd_dir(self.root / "matterhorn").name, "spectra"
+        )
+
+    def test_coadd_dir_raises_for_catalog_only_release(self):
+        """A release with no coadds must say so, not fail obscurely later."""
+        with self.assertRaises(FileNotFoundError) as caught:
+            self.spectra_io._coadd_dir(self.root / "jura")
+        self.assertIn("jura", str(caught.exception))
+
+    def test_zcatalog_path_per_layout(self):
+        """Every layout the zcatalog has used must resolve."""
+        expected = {
+            "fuji": "zcatalog/zall-pix-fuji.fits",
+            "guadalupe": "zcatalog/v1/zall-pix-guadalupe.fits",
+            "iron": "zcatalog/v1/zall-pix-iron.fits",
+            "jura": "zcatalog/v1/zall-pix-jura.fits",
+            "kibo": "zcatalog/v1.1/zall-pix-kibo.fits",
+            "loa": "zcatalog/v1/zall-pix-loa.fits",
+            "matterhorn": "zcatalog/v2/zall/zall-pix-matterhorn.fits",
+        }
+        for release, tail in expected.items():
+            with self.subTest(release=release):
+                got = self.spectra_io._zcatalog_path(release, self.root / release)
+                self.assertEqual(
+                    got.relative_to(self.root / release).as_posix(), tail
+                )
+
+    def test_zcatalog_path_prefers_latest_version(self):
+        """kibo's v1.1 must win over v1, and iron's v1 over v0."""
+        self.assertIn(
+            "v1.1",
+            str(self.spectra_io._zcatalog_path("kibo", self.root / "kibo")),
+        )
+        self.assertIn(
+            "v1/",
+            str(self.spectra_io._zcatalog_path("iron", self.root / "iron")),
+        )
+
+    def test_zcatalog_path_ignores_deprecated_copies(self):
+        """iron and loa keep a stale copy under v1/deprecated/."""
+        for release in ("iron", "loa"):
+            with self.subTest(release=release):
+                got = self.spectra_io._zcatalog_path(release, self.root / release)
+                self.assertNotIn("deprecated", str(got))
+
+    def test_zcatalog_path_missing_release_raises(self):
+        with self.assertRaises(FileNotFoundError):
+            self.spectra_io._zcatalog_path("nickel", self.root / "nickel")
+
+    def test_version_ordering(self):
+        """v1.1 sorts above v1, and v10 above v9."""
+        key = self.spectra_io._version_sort_key
+        self.assertGreater(key("v1.1"), key("v1"))
+        self.assertGreater(key("v10"), key("v9"))
+        self.assertGreater(key("v2"), key("v1.9"))
+
+    def test_healpix_column_accepts_both_names(self):
+        """matterhorn renamed HEALPIX to UNIQPIX."""
+        pick = self.spectra_io._healpix_column
+        self.assertEqual(pick(["TARGETID", "HEALPIX"]), "HEALPIX")
+        self.assertEqual(pick(["TARGETID", "UNIQPIX"]), "UNIQPIX")
+        with self.assertRaises(KeyError):
+            pick(["TARGETID", "SURVEY"])
 
 
 class TestKnownBugs(unittest.TestCase):
